@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Editor
+.vscode/*
+.idea/
+*.suo
+*.ntvs*
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Build output
+build/
+release/
+
+# System
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Local DB (dev)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+app-data/
+
+# Debug temp
+.tmp_*
+debug-*.md
+import-crash-during.*
+build-log.txt
+src-tauri/rustc-fake.cmd
+src-tauri/rustc-wrapper.ps1
+src-tauri/build-output.txt
+src-tauri/extracted-manifest.xml
+src-tauri/shuati-debug.log
+
+# ⚠️ Never commit updater private key
+src-tauri/keys/updater.key
+
+# Build tools
+rcedit.exe
