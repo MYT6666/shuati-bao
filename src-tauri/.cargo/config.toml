@@ -1,0 +1,10 @@
+[target.x86_64-pc-windows-msvc]
+linker = "link.exe"
+
+# 优化 release 体积：去除符号、LTO、单 codegen
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "s"
+panic = "abort"

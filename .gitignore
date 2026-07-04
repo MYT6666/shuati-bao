@@ -1,44 +1,52 @@
-# Dependencies
+# 依赖
 node_modules/
 dist/
 dist-ssr/
 *.local
 
-# Editor
+# 编辑器
 .vscode/*
+!.vscode/extensions.json
 .idea/
 *.suo
 *.ntvs*
+*.njsproj
+*.sln
+*.sw?
 
 # Rust / Tauri
 src-tauri/target/
 src-tauri/gen/schemas/
 
-# Build output
+# 构建产物
 build/
 release/
 
-# System
+# 系统文件
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Logs
+# 开发工具本地记忆
+.workbuddy/
+
+# 日志
 *.log
 logs/
 
-# Environment
+# 环境变量
 .env
 .env.local
 .env.*.local
 
-# Local DB (dev)
+# 应用数据（开发期产生的本地数据库等）
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
 app-data/
 
-# Debug temp
+# 调试临时文件（P1-16）
 .tmp_*
 debug-*.md
 import-crash-during.*
@@ -48,9 +56,3 @@ src-tauri/rustc-wrapper.ps1
 src-tauri/build-output.txt
 src-tauri/extracted-manifest.xml
 src-tauri/shuati-debug.log
-
-# ⚠️ Never commit updater private key
-src-tauri/keys/updater.key
-
-# Build tools
-rcedit.exe

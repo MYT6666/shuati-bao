@@ -1,0 +1,108 @@
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+
+  /* P1-13: 设计系统 token */
+  --color-primary: #42b883;
+  --color-primary-dark: #369870;
+  --color-primary-light: #f0fff5;
+  --color-danger: #f56c6c;
+  --color-danger-light: #fde2e2;
+  --color-success: #42b883;
+  --color-success-light: #d4edda;
+  --color-warning: #f5a623;
+  --color-warning-light: #fff8e1;
+  --color-info: #6a8dff;
+  --color-info-light: #f0f4ff;
+
+  --color-text: #0f0f0f;
+  --color-text-secondary: #666;
+  --color-text-tertiary: #999;
+  --color-bg: #f6f6f6;
+  --color-sidebar-bg: #f5f5f5;
+  --color-card: #ffffff;
+  --color-border: #ddd;
+  --color-border-light: #eee;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  color: var(--color-text);
+  background-color: var(--color-bg);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+.view-placeholder {
+  max-width: 640px;
+}
+
+.view-placeholder h2 {
+  margin-top: 0;
+}
+
+/* 字号设置（P1-15）：通过 html 的 data-font-size 属性切换 */
+html[data-font-size="small"] { font-size: 14px; }
+html[data-font-size="medium"] { font-size: 16px; }
+html[data-font-size="large"] { font-size: 18px; }
+
+/* 主题切换：通过 html 的 data-theme 属性切换 */
+html[data-theme="dark"] {
+  --color-primary: #42b883;
+  --color-primary-dark: #369870;
+  --color-primary-light: #1a3a2a;
+  --color-danger: #f56c6c;
+  --color-danger-light: #3a1a1a;
+  --color-success: #42b883;
+  --color-success-light: #1a3a2a;
+  --color-warning: #f5a623;
+  --color-warning-light: #3a2f1a;
+  --color-info: #6a8dff;
+  --color-info-light: #1a203a;
+
+  --color-text: #f6f6f6;
+  --color-text-secondary: #bbb;
+  --color-text-tertiary: #888;
+  --color-bg: #1a1a1a;
+  --color-sidebar-bg: #2a2a2a;
+  --color-card: #2a2a2a;
+  --color-border: #444;
+  --color-border-light: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    --color-primary: #42b883;
+    --color-primary-dark: #369870;
+    --color-primary-light: #1a3a2a;
+    --color-danger: #f56c6c;
+    --color-danger-light: #3a1a1a;
+    --color-success: #42b883;
+    --color-success-light: #1a3a2a;
+    --color-warning: #f5a623;
+    --color-warning-light: #3a2f1a;
+    --color-info: #6a8dff;
+    --color-info-light: #1a203a;
+
+    --color-text: #f6f6f6;
+    --color-text-secondary: #bbb;
+    --color-text-tertiary: #888;
+    --color-bg: #1a1a1a;
+    --color-sidebar-bg: #2a2a2a;
+    --color-card: #2a2a2a;
+    --color-border: #444;
+    --color-border-light: #333;
+  }
+}
