@@ -59,3 +59,6 @@ src-tauri/shuati-debug.log
 
 # Tauri updater 私钥（绝对不能提交！）
 src-tauri/keys/updater.key
+log.png
+extracted-icon.png
+rcedit.exe
