@@ -73,6 +73,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { api, Question } from '../utils/api'
+import { toastError } from '../utils/toast'
 
 const props = defineProps<{ visible: boolean; question: Question | null }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'saved', q: Question): void }>()
@@ -141,7 +142,7 @@ async function save() {
     await api.updateQuestion(updated)
     emit('saved', updated)
   } catch (e) {
-    alert('保存失败：' + (e instanceof Error ? e.message : String(e)))
+    toastError('保存失败：' + (e instanceof Error ? e.message : String(e)))
   } finally {
     saving.value = false
   }

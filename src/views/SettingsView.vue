@@ -67,9 +67,59 @@
     </section>
 
     <section>
+      <h3>更新</h3>
+      <p class="hint">当前版本：<b>{{ currentVersion }}</b></p>
+      <p class="hint">应用启动时会自动检查更新；也可手动点击下方按钮</p>
+      <div class="data-actions">
+        <button class="data-btn" :disabled="checkingUpdate" @click="manualCheckUpdate">
+          {{ checkingUpdate ? '检查中...' : '🔍 检查更新' }}
+        </button>
+        <button class="data-btn" @click="showUpdateLog = !showUpdateLog">📜 更新日志</button>
+      </div>
+      <div v-if="showUpdateLog" class="update-log">
+        <h4>更新日志</h4>
+        <div class="log-entry">
+          <span class="log-version">v0.1.0</span>
+          <ul>
+            <li>首次发布</li>
+            <li>支持 docx / txt / md / pdf 导入</li>
+            <li>AI 自动解析（多模型：智谱 / DeepSeek / Agnes）</li>
+            <li>收藏夹 / 错题本 / 学习热力图</li>
+            <li>题目导航 / 搜索高亮 / 题型筛选</li>
+            <li>自动更新支持</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
       <h3>数据</h3>
-      <p class="hint">数据库位置：{{ dbPath || '加载中...' }}</p>
-      <button class="data-btn" @click="backupDb">立即备份数据库</button>
+      <p class="hint" v-if="dbInfo">
+        <span class="data-label">数据库位置：</span>
+        <code class="data-path">{{ dbInfo.path }}</code>
+        <span class="data-size">({{ formatSize(dbInfo.size_bytes) }})</span>
+      </p>
+      <p class="hint" v-else>加载中...</p>
+      <p class="hint" v-if="dbInfo">
+        <span class="data-label">备份目录：</span>
+        <code class="data-path">{{ dbInfo.backups_dir }}</code>
+        <span class="data-size">({{ dbInfo.backup_count }} 个备份)</span>
+      </p>
+      <div class="data-actions">
+        <button class="data-btn" @click="backupDb">💾 立即备份</button>
+        <button class="data-btn" @click="openFolder">📁 打开数据目录</button>
+        <button class="data-btn" @click="showCustomize = !showCustomize">⚙️ 自定义位置</button>
+      </div>
+      <div v-if="showCustomize" class="customize-box">
+        <p class="hint">输入新的数据库文件目录（必须是已存在的文件夹路径）：</p>
+        <div class="customize-row">
+          <input v-model="customDir" placeholder="例如 D:\MyData\刷题宝" class="dir-input" />
+          <button class="data-btn" :disabled="applying" @click="pickCustomDir">📂 选择文件夹</button>
+          <button class="data-btn primary" :disabled="!customDir.trim() || applying" @click="applyCustomDir">应用</button>
+        </div>
+        <p class="hint warn">⚠ 修改后需点"重启应用"生效；当前数据库会被复制到新位置。已存在则覆盖。</p>
+        <p class="hint success" v-if="applyResult">{{ applyResult }}</p>
+      </div>
     </section>
 
     <section class="donate-section">
@@ -89,8 +139,15 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { getVersion } from '@tauri-apps/api/app'
+import { check as checkUpdateRaw, promptAndApplyUpdate } from '../utils/updater'
 import { api } from '../utils/api'
+import { toastSuccess, toastError } from '../utils/toast'
 import DonateDialog from '../components/DonateDialog.vue'
+
+const currentVersion = ref('0.0.0')
+const checkingUpdate = ref(false)
+const showUpdateLog = ref(false)
 
 const apiKey = ref('')
 const baseUrl = ref('https://open.bigmodel.cn/api/paas/v4')
@@ -100,8 +157,59 @@ const testing = ref(false)
 const testResult = ref<{ ok: boolean; msg: string } | null>(null)
 const theme = ref('system')
 const fontSize = ref('medium')
-const dbPath = ref('')
+const dbInfo = ref<{ path: string; size_bytes: number; backups_dir: string; backup_count: number } | null>(null)
 const showDonate = ref(false)
+const showCustomize = ref(false)
+const customDir = ref('')
+const applying = ref(false)
+const applyResult = ref('')
+const applyRestart = ref(false)
+
+function formatSize(b: number): string {
+  if (b < 1024) return `${b} B`
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
+  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(2)} MB`
+  return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+async function openFolder() {
+  try {
+    await api.openDbFolder()
+  } catch (e) {
+    toastError('打开失败：' + (e instanceof Error ? e.message : String(e)))
+  }
+}
+
+async function pickCustomDir() {
+  try {
+    const selected = await api.pickDatabaseFolder()
+    if (selected) {
+      customDir.value = selected
+    }
+  } catch (e) {
+    console.error('选择文件夹失败：', e)
+    toastError('选择文件夹失败：' + (e instanceof Error ? e.message : String(e)))
+  }
+}
+
+// @ts-ignore
+async function applyCustomDir() {
+  if (!customDir.value.trim()) return
+  applying.value = true
+  applyResult.value = ''
+  applyRestart.value = false
+  try {
+    const newPath = await api.changeDbPath(customDir.value.trim())
+    applyResult.value = '✓ 已设置，新位置：' + newPath + '\n点左下角"重启应用"按钮立即生效。'
+    applyRestart.value = true
+    // 刷新显示
+    dbInfo.value = await api.getDbInfo()
+  } catch (e) {
+    applyResult.value = '✗ 失败：' + (e instanceof Error ? e.message : String(e))
+  } finally {
+    applying.value = false
+  }
+}
 
 onMounted(async () => {
   try {
@@ -112,13 +220,42 @@ onMounted(async () => {
     // 读取主题/字号设置
     theme.value = (await api.getSetting('ui_theme')) || 'system'
     fontSize.value = (await api.getSetting('ui_font_size')) || 'medium'
-    dbPath.value = (await api.getSetting('db_path')) || ''
     applyTheme()
     applyFontSize()
+    // 读取真实数据库信息（不再依赖 db_path 设置项）
+    try {
+      dbInfo.value = await api.getDbInfo()
+    } catch (e) {
+    console.error('获取数据库信息失败：', e)
+    }
+    // 读取应用版本
+    try {
+      currentVersion.value = await getVersion()
+    } catch (e) {
+      console.error('读取版本失败：', e)
+    }
   } catch (e) {
-    alert('加载设置失败：' + (e instanceof Error ? e.message : String(e)))
+    toastError('加载设置失败：' + (e instanceof Error ? e.message : String(e)))
   }
 })
+
+// 手动检查更新
+async function manualCheckUpdate() {
+  checkingUpdate.value = true
+  try {
+    const update = await checkUpdateRaw()
+    if (!update) {
+      toastSuccess('已是最新版本')
+      return
+    }
+    // 有新版本，弹窗下载
+    await promptAndApplyUpdate(update)
+  } catch (e) {
+    toastError('检查更新失败：' + (e instanceof Error ? e.message : String(e)))
+  } finally {
+    checkingUpdate.value = false
+  }
+}
 
 function applyTheme() {
   const html = document.documentElement
@@ -150,7 +287,7 @@ async function save(key: string, value: string) {
     await api.setSetting(key, value)
     testResult.value = null
   } catch (e) {
-    alert('保存失败：' + (e instanceof Error ? e.message : String(e)))
+    toastError('保存失败：' + (e instanceof Error ? e.message : String(e)))
   }
 }
 
@@ -176,10 +313,10 @@ async function testConnection() {
 
 async function backupDb() {
   try {
-    await api.backupDatabase()
-    alert('备份成功！已保存到应用数据目录的 backups/ 文件夹')
+    const dst = await api.backupDatabase()
+    toastSuccess('备份成功：' + dst)
   } catch (e) {
-    alert('备份失败：' + (e instanceof Error ? e.message : String(e)))
+    toastError('备份失败：' + (e instanceof Error ? e.message : String(e)))
   }
 }
 </script>
@@ -205,8 +342,29 @@ input, select { padding: 6px; border: 1px solid var(--color-border); border-radi
 .key-links { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
 .key-links a { color: var(--color-primary); font-size: 13px; text-decoration: none; }
 .key-links a:hover { text-decoration: underline; }
-.data-btn { padding: 6px 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-card); color: var(--color-text); cursor: pointer; }
+.data-btn { padding: 6px 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-card); color: var(--color-text); cursor: pointer; transition: background 0.15s; }
 .data-btn:hover { background: var(--color-border-light); }
+.data-btn.primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.data-btn.primary:hover { background: var(--color-primary-dark); }
+.data-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.data-btn.danger { color: #e53935; border-color: #e53935; }
+.data-btn.danger:hover { background: #e53935; color: #fff; }
+.data-actions { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+.data-label { color: var(--color-text-secondary); margin-right: 4px; }
+.data-path { background: var(--color-bg); padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--color-text); border: 1px solid var(--color-border-light); word-break: break-all; }
+.data-size { color: var(--color-text-tertiary); margin-left: 6px; font-size: 12px; }
+.customize-box { background: var(--color-bg); border: 1px solid var(--color-border-light); border-radius: var(--radius-md); padding: 12px; margin-top: 8px; }
+.customize-row { display: flex; gap: 8px; margin: 8px 0; }
+.dir-input { flex: 1; padding: 6px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-card); color: var(--color-text); font-size: 13px; }
+.hint.warn { color: var(--color-warning); }
+.hint.success { color: var(--color-success); }
+
+/* 更新日志 */
+.update-log { background: var(--color-bg); border: 1px solid var(--color-border-light); border-radius: var(--radius-md); padding: 12px 16px; margin-top: 8px; max-height: 280px; overflow-y: auto; }
+.update-log h4 { margin: 0 0 8px 0; font-size: 13px; color: var(--color-text-secondary); }
+.log-entry { margin-bottom: 8px; }
+.log-version { display: inline-block; padding: 2px 8px; background: var(--color-primary-light); color: var(--color-primary); border-radius: 4px; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.update-log ul { margin: 4px 0 0 0; padding-left: 20px; color: var(--color-text-secondary); font-size: 13px; line-height: 1.7; }
 
 .donate-section { text-align: center; }
 .donate-section h3 { margin-top: 0; }

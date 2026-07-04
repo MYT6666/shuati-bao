@@ -56,3 +56,6 @@ src-tauri/rustc-wrapper.ps1
 src-tauri/build-output.txt
 src-tauri/extracted-manifest.xml
 src-tauri/shuati-debug.log
+
+# Tauri updater 私钥（绝对不能提交！）
+src-tauri/keys/updater.key

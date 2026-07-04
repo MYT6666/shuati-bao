@@ -1,7 +1,23 @@
 <template>
-  <div class="import">
+  <div
+    class="import"
+    :class="{ 'drop-active': dragActive }"
+    @dragenter.prevent="onDragEnter"
+    @dragover.prevent="onDragOver"
+    @dragleave.prevent="onDragLeave"
+    @drop.prevent="onDrop"
+  >
     <h2>导入题库</h2>
     <div v-if="bankId" class="target">导入到：{{ bankName }}</div>
+
+    <!-- 拖拽提示覆盖层 -->
+    <div v-if="dragActive && step === 1" class="drop-overlay">
+      <div class="drop-hint">
+        <div class="drop-icon">📂</div>
+        <div class="drop-text">松开鼠标导入文件</div>
+        <div class="drop-hint-small">支持 .docx / .txt / .md / .pdf</div>
+      </div>
+    </div>
 
     <div class="step" v-if="step === 1">
       <h3>步骤1：选择 Word 文件</h3>
@@ -82,6 +98,7 @@ import { readFile } from '@tauri-apps/plugin-fs'
 import { listen } from '@tauri-apps/api/event'
 // mammoth 改为动态 import，仅在用户选择文件后才加载（约 400KB 节省首屏）
 import { api, Question } from '../utils/api'
+import { toastError } from '../utils/toast'
 import { useBankStore } from '../stores/bank'
 import ImportReviewTable from '../components/ImportReviewTable.vue'
 
@@ -128,6 +145,44 @@ const progress = ref({ done: 0, total: 0 })
 const importWarning = ref('')
 const cancelling = ref(false)
 
+// 拖拽上传
+const dragActive = ref(false)
+let dragCounter = 0
+function onDragEnter() {
+  if (step.value !== 1) return
+  dragCounter++
+  dragActive.value = true
+}
+function onDragOver(e: DragEvent) {
+  if (step.value !== 1) return
+  e.dataTransfer!.dropEffect = 'copy'
+}
+function onDragLeave() {
+  dragCounter = Math.max(0, dragCounter - 1)
+  if (dragCounter === 0) dragActive.value = false
+}
+async function onDrop(e: DragEvent) {
+  dragActive.value = false
+  dragCounter = 0
+  if (step.value !== 1) return
+  const file = e.dataTransfer?.files?.[0]
+  if (!file) return
+  // Tauri 2 拖拽：dataTransfer.files 中可拿到 path
+  const filePath = (file as any).path as string | undefined
+  if (!filePath) {
+    toastError('无法获取文件路径，请用"选择文件"按钮')
+    return
+  }
+  const ext = (filePath.split('.').pop() || '').toLowerCase()
+  if (!['docx', 'txt', 'md', 'pdf'].includes(ext)) {
+    toastError('不支持的文件格式：' + ext + '（仅支持 .docx / .txt / .md / .pdf）')
+    return
+  }
+  // 模拟选择文件，复用 pickFile 之后的流程
+  fileName.value = filePath
+  await runImport(filePath)
+}
+
 // 进度阶段
 type Stage = 'reading' | 'parsing' | 'recognizing' | 'saving' | 'done'
 const stage = ref<Stage>('reading')
@@ -169,9 +224,9 @@ onMounted(async () => {
         bankId.value = b.id
         bankName.value = b.name
       } catch (e) {
-        alert('创建题库失败：' + (e instanceof Error ? e.message : String(e)))
-        router.push('/')
-      }
+      toastError('创建题库失败：' + (e instanceof Error ? e.message : String(e)))
+      router.push('/')
+    }
     } else {
       router.push('/')
     }
@@ -189,9 +244,20 @@ function htmlToText(html: string): string {
 
 async function pickFile() {
   dbg('pickFile_start', { engine: engine.value, bankId: bankId.value })
-  const selected = await open({ filters: [{ name: 'Word', extensions: ['docx'] }] })
+  const selected = await open({
+    filters: [
+      { name: '题库文件', extensions: ['docx', 'txt', 'md', 'pdf'] },
+    ],
+  })
   if (!selected || Array.isArray(selected)) return
-  fileName.value = selected as string
+  const filePath = selected as string
+  fileName.value = filePath
+  await runImport(filePath)
+}
+
+// 实际导入流程：传入文件绝对路径
+async function runImport(filePath: string) {
+  const ext = (filePath.split('.').pop() || '').toLowerCase()
   step.value = 2
   progress.value = { done: 0, total: 0 }
   importWarning.value = ''
@@ -224,28 +290,61 @@ async function pickFile() {
       }
     }
 
-    // 阶段1：读取文件
+    // 阶段1+2：按文件类型分别处理
+    let html: string
+    let text: string
     stage.value = 'reading'
-    status.value = '正在读取文件...'
-    dbg('readFile_start', { path: selected })
-    const bytes = await readFile(selected as string)
-    const arrayBuffer = bytes.buffer
-    dbg('readFile_done', { bytes: bytes.length, arrayBufferByteLen: arrayBuffer.byteLength })
-
-    // 阶段2：解析文档（动态加载 mammoth，首屏不打包）
-    stage.value = 'parsing'
-    status.value = '正在解析 Word 文档...'
-    dbg('mammoth_start')
-    const mammoth = (await import('mammoth')).default
-    const result = await mammoth.convertToHtml({ arrayBuffer })
-    const html = result.value
-    dbg('mammoth_done', { htmlLen: html.length, messages: result.messages.length })
+    if (ext === 'docx') {
+      // Word 文档：动态加载 mammoth
+      status.value = '正在读取 Word 文件...'
+      dbg('readFile_start', { path: filePath })
+      const bytes = await readFile(filePath)
+      const arrayBuffer = bytes.buffer
+      dbg('readFile_done', { bytes: bytes.length })
+      stage.value = 'parsing'
+      status.value = '正在解析 Word 文档...'
+      dbg('mammoth_start')
+      const mammoth = (await import('mammoth')).default
+      const result = await mammoth.convertToHtml({ arrayBuffer })
+      html = result.value
+      dbg('mammoth_done', { htmlLen: html.length, messages: result.messages.length })
+      text = htmlToText(html)
+    } else if (ext === 'pdf') {
+      // PDF：直接传路径给后端 lopdf 处理
+      status.value = '正在解析 PDF...'
+      dbg('pdf_start', { path: filePath })
+      const cnt = await api.importFromPdf(bankId.value, filePath)
+      dbg('pdf_done', { count: cnt })
+      // 跳到 review 阶段
+      stage.value = 'saving'
+      status.value = '正在加载题目...'
+      const qs = await api.listQuestions(bankId.value)
+      reviewList.value = qs
+      stage.value = 'done'
+      stopTimer()
+      importWarning.value = cnt === 0 ? '未识别到题目，请检查 PDF 是否含可选中文本（扫描件无法识别）。' : ''
+      if (unlisten) unlisten()
+      return
+    } else {
+      // txt / md 等纯文本
+      status.value = '正在读取文本...'
+      dbg('readText_start', { path: filePath })
+      const bytes = await readFile(filePath)
+      text = new TextDecoder('utf-8').decode(bytes)
+      // 转成 mammoth 兼容 HTML：每个非空行包 <p>，后端会复用 html_to_questions
+      html = text
+        .split(/\r?\n/)
+        .map(l => l.trim())
+        .filter(l => l.length > 0)
+        .map(l => `<p>${l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`)
+        .join('\n')
+      dbg('readText_done', { textLen: text.length, htmlLen: html.length })
+    }
 
     // 阶段3：识别
     stage.value = 'recognizing'
     status.value = engine.value === 'ai' ? 'AI 识别中（分块并发处理）...' : '结构化识别中...'
     if (engine.value === 'ai') {
-      const text = htmlToText(html)
       dbg('importWithAi_call_start', { textLen: text.length })
       const importResult = await api.importWithAi(bankId.value, text)
       dbg('importWithAi_call_done', { count: importResult.count, expected: importResult.expected })
@@ -276,6 +375,7 @@ async function pickFile() {
     dbg('step3_switch_start')
     step.value = 3
     dbg('step3_switch_done')
+    if (unlisten) unlisten()
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     dbg('pickFile_error', { msg, cancelling: cancelling.value, stack: e instanceof Error ? e.stack : undefined })
@@ -328,6 +428,15 @@ async function confirmImport() {
 </script>
 
 <style scoped>
+.import { position: relative; min-height: 100%; }
+.drop-active { outline: 2px dashed var(--color-primary); outline-offset: -8px; }
+.drop-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 1000; pointer-events: none; animation: dropFade 0.15s; }
+.drop-hint { background: var(--color-card); border-radius: var(--radius-lg); padding: 48px 80px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.3); border: 3px dashed var(--color-primary); }
+.drop-icon { font-size: 64px; margin-bottom: 12px; }
+.drop-text { font-size: 20px; font-weight: 600; color: var(--color-text); margin-bottom: 6px; }
+.drop-hint-small { font-size: 13px; color: var(--color-text-tertiary); }
+@keyframes dropFade { from { opacity: 0; } to { opacity: 1; } }
+
 .step { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px; margin-top: 16px; }
 .actions { margin-top: 16px; display: flex; gap: 8px; }
 button { padding: 8px 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; background: var(--color-card); color: var(--color-text); }

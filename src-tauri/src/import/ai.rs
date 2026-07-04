@@ -54,24 +54,30 @@ const PROMPT: &str = r#"你是题库结构化助手。下面是 Word 文档提�
 "#;
 
 /// 每块的题目数上限
-/// 30 题/块（无 analysis 字段）：输出约 1500-2500 token，远低于 4096 上限，不截断不丢题
-const QUESTIONS_PER_CHUNK: usize = 30;
+/// 15 题/块（无 analysis 字段）：输出约 800-1500 token，max_tokens=2048 足够
+/// 较小分块 = 单次请求输出更少 = 响应时间更短 + 触达 token 上限概率更低
+const QUESTIONS_PER_CHUNK: usize = 15;
 /// 失败块重试次数
 const MAX_RETRIES: usize = 2;
 
+/// 单次 AI 请求的最大输出 token
+/// 选择题为主的题库，单题 JSON 约 50-100 token，15 题约 1500，留 2048 余量
+/// 比 4096 节省约 50% 输出时间（output token 与响应时间近似线性）
+const MAX_TOKENS: u32 = 2048;
+
 /// 根据 base_url 自动检测最佳并发数
 /// - agnes-ai.com: 16（免费高并发）
-/// - bigmodel.cn（智谱）: 5（免费版 QPS=5）
-/// - deepseek.com: 5
+/// - bigmodel.cn（智谱）: 6（免费版 QPS=5 略高一点靠重试兜底）
+/// - deepseek.com: 8
 /// - openai.com: 10
-/// - 默认: 5（安全值）
+/// - 默认: 6（安全值）
 fn detect_concurrency(base_url: &str) -> usize {
     let url = base_url.to_lowercase();
     if url.contains("agnes-ai.com") { 16 }
-    else if url.contains("bigmodel.cn") { 5 }
-    else if url.contains("deepseek.com") { 5 }
+    else if url.contains("bigmodel.cn") { 6 }
+    else if url.contains("deepseek.com") { 8 }
     else if url.contains("openai.com") { 10 }
-    else { 5 }
+    else { 6 }
 }
 
 pub async fn ai_structurize(
@@ -112,6 +118,9 @@ pub async fn ai_structurize(
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(90))
+        // 复用 HTTP 连接，避免每个请求都重新 TCP/TLS 握手（节省 100-300ms/请求）
+        .pool_max_idle_per_host(concurrency * 2)
+        .tcp_keepalive(Duration::from_secs(30))
         .build()?;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut handles = Vec::new();
@@ -156,12 +165,12 @@ pub async fn ai_structurize(
                         let err_str = e.to_string();
                         eprintln!("[AI] 第 {}/{} 块第 {}/{} 次尝试失败: {}", i + 1, total_chunks, attempt, MAX_RETRIES, e);
                         last_err = Some(e);
-                        // 429 限流：等待 10 秒再重试；其他错误等 3 秒
+                        // 429 限流：等待 5 秒再重试；其他错误等 1 秒
                         let backoff = if err_str.contains("429") || err_str.contains("Too Many Requests") || err_str.contains("rate") {
-                            eprintln!("[AI] 检测到限流，等待 10 秒后重试");
-                            10
+                            eprintln!("[AI] 检测到限流，等待 5 秒后重试");
+                            5
                         } else {
-                            3
+                            1
                         };
                         tokio::time::sleep(Duration::from_secs(backoff)).await;
                     }
@@ -325,18 +334,39 @@ pub async fn analyze_question(
     } else {
         user.push_str("参考答案：（无）\n");
     }
-    user.push_str("\n请对本题进行解析。");
 
-    let system = "你是一位耐心的题目解析助手。请对给出的题目进行详细解析，内容包括：\n\
-1. 考查的知识点\n\
-2. 逐项分析（对选择题，说明每个选项对错的原因）\n\
-3. 为什么参考答案是正确的\n\
-4. 解题思路与技巧\n\n\
-要求：用中文回答，条理清晰，使用 Markdown 列表/分段，不要重复题干全文。";
+    // 结构化输出 prompt：让 AI 直接返回 JSON 对象
+    // 前端按字段渲染（知识点 / 选项解析 / 参考答案 / 解题思路），不再依赖 markdown 文本
+    let system = r#"你是一位经验丰富的题目解析老师。请对给出的题目进行**详细解析**，**只输出一个 JSON 对象**，格式如下：
+
+{
+  "knowledge_point": "考查的知识点（说明属于哪个学科领域、什么主题，2-3 句话，必要时引用相关概念或原理）",
+  "background": "相关背景知识（解释题目涉及的概念、原理、历史背景或现实意义，帮助用户理解为什么这么考，3-5 句话）",
+  "option_analysis": [
+    {"letter": "A", "verdict": "正确"或"错误", "reason": "该选项为什么对/错，结合相关知识点详细说明，2-3 句话"},
+    {"letter": "B", "verdict": "...", "reason": "..."},
+    {"letter": "C", "verdict": "...", "reason": "..."},
+    {"letter": "D", "verdict": "...", "reason": "..."}
+  ],
+  "reference_explanation": "为什么参考答案是正确的（结合背景知识和题干关键信息，引用相关原理/概念，详细说明判断依据，3-5 句话）",
+  "common_mistakes": "常见错误（考生在此题上容易选错的选项及原因，1-2 句话）",
+  "solving_skill": "此类题目的通用解题技巧（包含识别题型的方法、解题步骤、记忆口诀或易混点对比，3-5 句话，要实用好记）"
+}
+
+要求：
+1. 严格 JSON，不要任何解释文字、不要 markdown 代码块标记
+2. 选项解析只针对选择题（single/multi），其他题型 option_analysis 留空数组 []
+3. **内容要详细充实**：每个字段都要有实质内容，不要一两句话草草了事
+4. 举例说明、数据支撑、对比分析都可以用上
+5. 用中文回答"#;
+    let user_tail = "\n请按要求输出详细 JSON 解析。";
+    user.push_str(user_tail);
 
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(120))
+        .pool_max_idle_per_host(4)
+        .tcp_keepalive(Duration::from_secs(30))
         .build()?;
     let req = AiRequest {
         model,
@@ -345,7 +375,7 @@ pub async fn analyze_question(
             AiMessage { role: "user", content: &user },
         ],
         temperature: 0.3,
-        max_tokens: 4096,
+        max_tokens: 3000,  // 详细解析 6 个字段需要 2500-3000 token，单题解析可以慢一点但要详尽
     };
 
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
@@ -411,7 +441,7 @@ async fn call_ai(client: &Client, text: &str, api_key: &str, base_url: &str, mod
             AiMessage { role: "user", content: text },
         ],
         temperature: 0.1,
-        max_tokens: 4096,
+        max_tokens: MAX_TOKENS,
     };
 
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));

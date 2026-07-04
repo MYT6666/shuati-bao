@@ -3,9 +3,16 @@
     <div class="stem">
       <span class="idx">{{ index + 1 }}.</span>
       <span class="type-tag">{{ typeLabel }}</span>
-      <span v-if="favorited" class="fav-mark" title="已收藏">★</span>
       <span v-if="elapsedSecs !== null" class="timer" title="本题用时">{{ formatTime(elapsedSecs) }}</span>
-      {{ question.stem }}
+      <span class="stem-text">{{ question.stem }}</span>
+      <!-- 右上角操作按钮组 -->
+      <div class="card-toolbar">
+        <button class="tool-btn" :class="{ active: favorited }" :title="favorited ? '取消收藏' : '收藏本题'" @click="$emit('toggle-favorite')">
+          {{ favorited ? '★' : '☆' }}
+        </button>
+        <button class="tool-btn" title="编辑本题" @click="showEdit = true">✎</button>
+        <button class="tool-btn ai" :disabled="analyzing" :title="analyzing ? 'AI 解析中…' : 'AI 详细解析'" @click="analyze">🤖</button>
+      </div>
     </div>
 
     <!-- 选择题 -->
@@ -34,14 +41,11 @@
     </div>
 
     <div class="actions">
-      <button v-if="hasPrev" @click="$emit('prev')">上一题</button>
-      <button v-if="!submitted" @click="submit">确认</button>
-      <button v-if="submitted && (!isSelfEval || selfEvalDone)" @click="$emit('next')">下一题</button>
-      <button v-if="submitted && !isChoice && question.type !== 'judge'" @click="selfEval(true)">答对</button>
-      <button v-if="submitted && !isChoice && question.type !== 'judge'" @click="selfEval(false)">答错</button>
-      <button class="fav-toggle" :class="{ active: favorited }" @click="$emit('toggle-favorite')">{{ favorited ? '★ 已收藏' : '☆ 收藏' }}</button>
-      <button class="edit-btn" @click="showEdit = true">✎ 编辑</button>
-      <button class="ai-btn" :disabled="analyzing" @click="analyze">{{ analyzing ? '解析中…' : 'AI 解析' }}</button>
+      <button v-if="hasPrev" class="act-btn ghost" @click="$emit('prev')">← 上一题</button>
+      <button v-if="!submitted" class="act-btn primary" @click="submit">确认答案</button>
+      <button v-if="submitted && (!isSelfEval || selfEvalDone)" class="act-btn primary" @click="$emit('next')">下一题 →</button>
+      <button v-if="submitted && !isChoice && question.type !== 'judge'" class="act-btn success" @click="selfEval(true)">✓ 答对</button>
+      <button v-if="submitted && !isChoice && question.type !== 'judge'" class="act-btn danger" @click="selfEval(false)">✗ 答错</button>
     </div>
 
     <QuestionEditDialog :visible="showEdit" :question="question" @close="showEdit = false" @saved="onQuestionSaved" />
@@ -64,8 +68,78 @@
     </div>
 
     <div v-if="aiAnalysis" class="ai-analysis">
-      <strong>AI 解析：</strong>
-      <pre>{{ aiAnalysis }}</pre>
+      <!-- 标题区 -->
+      <div class="ai-header">
+        <span class="ai-header-icon">🤖</span>
+        <span>AI 详细解析</span>
+        <span class="ai-header-badge">由 AI 生成，仅供参考</span>
+      </div>
+
+      <!-- 知识点 -->
+      <div v-if="aiAnalysis.knowledge_point" class="ai-section knowledge">
+        <div class="ai-section-title">
+          <span class="icon">📌</span>
+          <span>考查的知识点</span>
+        </div>
+        <div class="ai-section-body">{{ aiAnalysis.knowledge_point }}</div>
+      </div>
+
+      <!-- 背景知识 -->
+      <div v-if="aiAnalysis.background" class="ai-section background">
+        <div class="ai-section-title">
+          <span class="icon">📚</span>
+          <span>相关背景</span>
+        </div>
+        <div class="ai-section-body">{{ aiAnalysis.background }}</div>
+      </div>
+
+      <!-- 选项解析 -->
+      <div v-if="aiAnalysis.option_analysis && aiAnalysis.option_analysis.length" class="ai-section">
+        <div class="ai-section-title">
+          <span class="icon">📋</span>
+          <span>逐项分析</span>
+          <span class="ai-section-count">共 {{ aiAnalysis.option_analysis.length }} 项</span>
+        </div>
+        <div class="ai-options">
+          <div v-for="(oa, i) in aiAnalysis.option_analysis" :key="i" class="ai-option-row" :class="isOptCorrect(oa.verdict) ? 'is-correct' : 'is-wrong'">
+            <div class="ai-option-head">
+              <span class="ai-option-letter">{{ oa.letter }}</span>
+              <span class="ai-option-verdict">
+                <span v-if="isOptCorrect(oa.verdict)">✓ 正确</span>
+                <span v-else>✗ 错误</span>
+              </span>
+            </div>
+            <div class="ai-option-reason">{{ oa.reason }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 参考答案 -->
+      <div v-if="aiAnalysis.reference_explanation" class="ai-section reference">
+        <div class="ai-section-title">
+          <span class="icon">✅</span>
+          <span>参考答案解析</span>
+        </div>
+        <div class="ai-section-body">{{ aiAnalysis.reference_explanation }}</div>
+      </div>
+
+      <!-- 常见错误 -->
+      <div v-if="aiAnalysis.common_mistakes" class="ai-section warning">
+        <div class="ai-section-title">
+          <span class="icon">⚠️</span>
+          <span>常见错误</span>
+        </div>
+        <div class="ai-section-body">{{ aiAnalysis.common_mistakes }}</div>
+      </div>
+
+      <!-- 解题技巧 -->
+      <div v-if="aiAnalysis.solving_skill" class="ai-section tip">
+        <div class="ai-section-title">
+          <span class="icon">💡</span>
+          <span>解题技巧 / 记忆口诀</span>
+        </div>
+        <div class="ai-section-body">{{ aiAnalysis.solving_skill }}</div>
+      </div>
     </div>
     <div v-if="aiError" class="ai-error">{{ aiError }}</div>
   </div>
@@ -148,8 +222,22 @@ onBeforeUnmount(() => stopTimer())
 
 // AI 解析相关
 const analyzing = ref(false)
-const aiAnalysis = ref('')
+interface OptionAnalysis { letter: string; verdict: string; reason: string }
+interface AiAnalysisData {
+  knowledge_point?: string
+  background?: string
+  option_analysis?: OptionAnalysis[]
+  reference_explanation?: string
+  common_mistakes?: string
+  solving_skill?: string
+}
+const aiAnalysis = ref<AiAnalysisData | null>(null)
 const aiError = ref('')
+
+function isOptCorrect(verdict: string): boolean {
+  const v = verdict.trim()
+  return v === '正确' || v === '对' || v === '✓' || v === '√'
+}
 
 // 题目编辑
 const showEdit = ref(false)
@@ -346,9 +434,28 @@ async function analyze() {
   if (analyzing.value) return
   analyzing.value = true
   aiError.value = ''
-  aiAnalysis.value = ''
+  aiAnalysis.value = null
   try {
-    aiAnalysis.value = await api.analyzeQuestion(props.question)
+    const raw = await api.analyzeQuestion(props.question)
+    // 解析 AI 返回的 JSON（兼容 markdown 代码块包裹）
+    let s = raw.trim()
+    s = s.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '').trim()
+    const start = s.indexOf('{')
+    const end = s.lastIndexOf('}')
+    if (start >= 0 && end > start) {
+      s = s.slice(start, end + 1)
+    }
+    try {
+      aiAnalysis.value = JSON.parse(s) as AiAnalysisData
+    } catch (parseErr) {
+      // 解析失败：原始文本回退显示
+      aiAnalysis.value = {
+        knowledge_point: '⚠ AI 返回格式异常，原始内容：',
+        option_analysis: [],
+        reference_explanation: raw,
+        solving_skill: '',
+      }
+    }
   } catch (e) {
     aiError.value = '解析失败：' + (e instanceof Error ? e.message : String(e))
   } finally {
@@ -359,32 +466,173 @@ async function analyze() {
 
 <style scoped>
 .qcard { background: var(--color-card); border-radius: var(--radius-lg); padding: 24px; border: 1px solid var(--color-border-light); }
-.stem { font-size: 16px; line-height: 1.6; margin-bottom: 16px; position: relative; }
+.stem { font-size: 16px; line-height: 1.6; margin-bottom: 16px; position: relative; padding-right: 130px; }
 .idx { font-weight: bold; margin-right: 8px; }
 .type-tag { background: var(--color-border-light); padding: 2px 8px; border-radius: var(--radius-sm); font-size: 12px; margin-right: 8px; }
-.fav-mark { color: var(--color-warning); margin-right: 8px; font-size: 14px; }
 .timer { color: var(--color-text-tertiary); font-size: 12px; margin-right: 8px; font-family: monospace; background: var(--color-border-light); padding: 2px 6px; border-radius: var(--radius-sm); }
-.fav-toggle { padding: 6px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-card); cursor: pointer; color: var(--color-text-secondary); }
-.edit-btn { padding: 6px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-card); cursor: pointer; color: var(--color-text-secondary); }
-.edit-btn:hover { background: var(--color-border-light); color: var(--color-primary); }
-.fav-toggle:hover { background: var(--color-warning-light); border-color: var(--color-warning); }
-.fav-toggle.active { color: var(--color-warning); border-color: var(--color-warning); background: var(--color-warning-light); }
+
+/* 右上角工具栏 */
+.card-toolbar { position: absolute; top: -4px; right: 0; display: flex; gap: 6px; }
+.tool-btn { width: 32px; height: 32px; border: 1px solid var(--color-border); border-radius: 50%; background: var(--color-card); cursor: pointer; font-size: 15px; line-height: 1; color: var(--color-text-secondary); display: flex; align-items: center; justify-content: center; transition: all 0.15s; padding: 0; }
+.tool-btn:hover { background: var(--color-primary-light); color: var(--color-primary); border-color: var(--color-primary); transform: translateY(-1px); }
+.tool-btn.active { background: #fef3c7; color: #d97706; border-color: #fde68a; }
+.tool-btn.ai:hover { background: #eef2ff; color: #4f46e5; border-color: #a5b4fc; }
+.tool-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 .options { display: flex; flex-direction: column; gap: 8px; }
 .option { text-align: left; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-card); cursor: pointer; color: var(--color-text); }
 .option.selected { border-color: var(--color-primary); background: var(--color-primary-light); }
 .option.correct { border-color: var(--color-success); background: var(--color-success-light); }
 .option.wrong { border-color: var(--color-danger); background: var(--color-danger-light); }
 .letter { font-weight: bold; margin-right: 8px; }
-.actions { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+.actions { margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.act-btn { padding: 9px 18px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-card); cursor: pointer; color: var(--color-text); font-size: 14px; font-weight: 500; transition: all 0.15s; }
+.act-btn:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+.act-btn.primary { background: var(--color-primary); color: #fff; border-color: var(--color-primary); margin-left: auto; }
+.act-btn.primary:hover { background: var(--color-primary-dark); }
+.act-btn.ghost { background: transparent; }
+.act-btn.success { background: #16a34a; color: #fff; border-color: #16a34a; margin-left: auto; }
+.act-btn.success:hover { background: #15803d; }
+.act-btn.danger { background: #dc2626; color: #fff; border-color: #dc2626; }
+.act-btn.danger:hover { background: #b91c1c; }
 .hint { margin-top: 8px; font-size: 12px; color: var(--color-text-tertiary); }
 .feedback { margin-top: 16px; padding: 12px; border-radius: var(--radius-md); background: var(--color-danger-light); }
 .feedback.correct { background: var(--color-success-light); }
 .feedback.exam { background: var(--color-info-light); color: var(--color-info); }
 .analysis { margin-top: 8px; color: var(--color-text-secondary); }
 textarea { width: 100%; min-height: 80px; padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-card); color: var(--color-text); }
-.ai-btn { margin-left: auto; background: var(--color-info); color: #fff; border: none; padding: 8px 14px; border-radius: var(--radius-md); cursor: pointer; }
-.ai-btn:disabled { background: var(--color-text-tertiary); cursor: not-allowed; }
-.ai-analysis { margin-top: 16px; padding: 12px; border-radius: var(--radius-md); background: var(--color-info-light); border: 1px solid var(--color-info); }
-.ai-analysis pre { white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; font-family: inherit; font-size: 14px; line-height: 1.6; }
+.ai-analysis {
+  margin-top: 20px;
+  padding: 20px 24px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid #cbd5e1;
+  font-size: 14px;
+  line-height: 1.75;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.ai-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #1e40af;
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #c7d8f5;
+}
+.ai-header-icon { font-size: 22px; }
+.ai-header-badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: #94a3b8;
+  background: #fff;
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+}
+.ai-section {
+  margin-bottom: 16px;
+  padding: 12px 14px 12px 16px;
+  border-radius: var(--radius-md);
+  background: #fff;
+  border-left: 4px solid #cbd5e1;
+  position: relative;
+}
+.ai-section:last-child { margin-bottom: 0; }
+.ai-section.knowledge { border-left-color: #f59e0b; background: linear-gradient(90deg, #fffbeb 0%, #fff 30%); }
+.ai-section.background { border-left-color: #6366f1; background: linear-gradient(90deg, #eef2ff 0%, #fff 30%); }
+.ai-section.reference { border-left-color: #16a34a; background: linear-gradient(90deg, #f0fdf4 0%, #fff 30%); }
+.ai-section.warning { border-left-color: #ef4444; background: linear-gradient(90deg, #fef2f2 0%, #fff 30%); }
+.ai-section.tip { border-left-color: #0ea5e9; background: linear-gradient(90deg, #f0f9ff 0%, #fff 30%); }
+.ai-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  color: #1e293b;
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+.ai-section-title .icon { font-size: 17px; }
+.ai-section-count {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: #94a3b8;
+  background: #f1f5f9;
+  padding: 1px 8px;
+  border-radius: 10px;
+}
+.ai-section-body {
+  color: #334155;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: justify;
+  font-size: 14px;
+}
+.ai-options { display: flex; flex-direction: column; gap: 10px; }
+.ai-option-row {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: #fafafa;
+  border: 1px solid #e5e7eb;
+  border-left: 4px solid #cbd5e1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: all 0.15s;
+}
+.ai-option-row:hover { transform: translateX(2px); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05); }
+.ai-option-row.is-correct {
+  border-left-color: #16a34a;
+  background: linear-gradient(90deg, #dcfce7 0%, #fff 60%);
+  border-color: #bbf7d0;
+}
+.ai-option-row.is-wrong {
+  border-left-color: #dc2626;
+  background: linear-gradient(90deg, #fee2e2 0%, #fff 60%);
+  border-color: #fecaca;
+}
+.ai-option-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ai-option-letter {
+  font-weight: 800;
+  font-size: 16px;
+  color: #475569;
+  width: 24px;
+  text-align: center;
+  background: #fff;
+  border-radius: 50%;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #cbd5e1;
+}
+.ai-option-row.is-correct .ai-option-letter { color: #15803d; border-color: #16a34a; }
+.ai-option-row.is-wrong .ai-option-letter { color: #b91c1c; border-color: #dc2626; }
+.ai-option-verdict {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: #e2e8f0;
+  color: #475569;
+  letter-spacing: 0.5px;
+}
+.ai-option-row.is-correct .ai-option-verdict { background: #16a34a; color: #fff; }
+.ai-option-row.is-wrong .ai-option-verdict { background: #dc2626; color: #fff; }
+.ai-option-reason {
+  color: #475569;
+  font-size: 13.5px;
+  line-height: 1.7;
+  padding-left: 34px;
+  text-align: justify;
+}
 .ai-error { margin-top: 12px; padding: 8px 12px; border-radius: var(--radius-md); background: var(--color-danger-light); color: var(--color-danger); }
 </style>

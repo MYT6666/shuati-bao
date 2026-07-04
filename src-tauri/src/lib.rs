@@ -52,6 +52,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let app_data = app.path().app_data_dir().expect("no app data dir");
             let db_state = db::open_db(&app_data).expect("failed to open db");
@@ -75,11 +76,18 @@ pub fn run() {
             commands::practice::list_mastered,
             commands::practice::mark_wrong_mastered,
             commands::import::import_from_html,
+            commands::import::import_from_pdf,
             commands::import::import_with_ai,
             commands::import::test_ai_connection,
             commands::import::cancel_import,
             commands::settings::get_setting,
             commands::settings::set_setting,
+            commands::settings::get_db_info,
+            commands::settings::open_db_folder,
+            commands::settings::pick_database_folder,
+            commands::settings::change_db_path,
+            commands::settings::restart_app,
+            commands::settings::quit_app,
             commands::settings::ocr_available,
             commands::settings::backup_database,
             commands::favorite::toggle_favorite,

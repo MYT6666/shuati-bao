@@ -48,6 +48,34 @@ pub fn import_from_html(app: AppHandle, db: State<'_, DbState>, bank_id: i64, ht
     Ok(count)
 }
 
+/// 从 PDF 文件路径提取每页文本并按 docx 兼容 HTML 格式组装
+#[tauri::command]
+pub fn import_from_pdf(app: AppHandle, db: State<'_, DbState>, bank_id: i64, path: String) -> anyhow::Result<i64, String> {
+    crate::dbg_log(format!("import_from_pdf_start bank_id={} path={}", bank_id, path));
+    // P0 数据安全：导入前自动备份
+    let _ = crate::commands::settings::auto_backup_before_import(&app);
+
+    // 1. 用 lopdf 提取文本
+    let html = crate::import::pdf::pdf_to_html(&path).map_err(|e| {
+        crate::dbg_log(format!("  pdf_parse_error: {}", e));
+        format!("PDF 解析失败：{}", e)
+    })?;
+    crate::dbg_log(format!("  pdf_to_html_done html_len={}", html.len()));
+
+    // 2. 复用 import_from_html 走结构化识别入库
+    crate::dbg_log("  reuse_import_from_html_begin");
+    let questions = crate::import::pipeline::html_to_questions(&html, bank_id).map_err(|e| {
+        crate::dbg_log(format!("  html_to_questions_error: {}", e));
+        e.to_string()
+    })?;
+    let count = questions.len() as i64;
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    repo::clear_bank_questions(&conn, bank_id).map_err(|e| e.to_string())?;
+    repo::insert_questions(&conn, bank_id, &questions).map_err(|e| e.to_string())?;
+    crate::dbg_log(format!("import_from_pdf_done count={}", count));
+    Ok(count)
+}
+
 /// 测试 AI 连通性（导入前先测，避免卡死）
 #[tauri::command]
 pub async fn test_ai_connection(db: State<'_, DbState>) -> anyhow::Result<(), String> {

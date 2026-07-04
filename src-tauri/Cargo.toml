@@ -33,3 +33,5 @@ chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1"
 thiserror = "1"
 regex = "1"
+lopdf = "0.34"
+tauri-plugin-updater = "2"

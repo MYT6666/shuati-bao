@@ -65,6 +65,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, Question } from '../utils/api'
+import { toastError } from '../utils/toast'
 import QuestionCard from '../components/QuestionCard.vue'
 
 const route = useRoute()
@@ -95,7 +96,7 @@ async function loadData() {
     masteredIds.value = mastered
     favoriteIds.value = new Set(favs)
   } catch (e) {
-    alert('加载错题失败：' + (e instanceof Error ? e.message : String(e)))
+    toastError('加载错题失败：' + (e instanceof Error ? e.message : String(e)))
   }
 }
 
@@ -177,7 +178,7 @@ async function markMastered(questionId: number) {
       await next()
     }
   } catch (e) {
-    alert('标记失败：' + (e instanceof Error ? e.message : String(e)))
+    toastError('标记失败：' + (e instanceof Error ? e.message : String(e)))
   }
 }
 
@@ -187,7 +188,7 @@ async function restoreToPending(questionId: number) {
     await api.recordPractice({ bank_id: bankId, question_id: questionId, user_answer: '', is_correct: false, duration_ms: null })
     await loadData()
   } catch (e) {
-    alert('放回失败：' + (e instanceof Error ? e.message : String(e)))
+    toastError('放回失败：' + (e instanceof Error ? e.message : String(e)))
   }
 }
 

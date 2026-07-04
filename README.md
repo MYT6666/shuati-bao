@@ -1,101 +1,76 @@
-# 刷题宝 (ShuatiBao)
+# 刷题宝
 
-一款面向个人备考场景的**本地题库刷题工具**：把 Word 题库（.docx）一键导入，自动识别题目结构、答案、章节，支持顺序/随机/错题重练/模拟考试 4 种练习模式，配有收藏、计时、搜索、AI 解析等小工具。
+> 智能题库练习桌面应用 · 导入即刷 · AI 自动解析 · 永久免费
 
-**所有数据保存在你自己的电脑里**——不上传任何题库内容，AI 解析也只用你配置的 Key 直接调模型。
+![logo](public/logo-256.png)
 
----
+一款基于 Tauri + Vue 3 的桌面刷题应用，支持 Word/PDF/TXT/Markdown 导入，AI 智能解析题目，多种学习模式，让刷题更高效。
 
-## ✨ 功能
+## ✨ 核心功能
 
-| | |
+- 📚 **题库管理** — 导入 / 收藏 / 错题本 / 学习记录
+- 🤖 **AI 智能解析** — 支持多模型（智谱 / DeepSeek / Agnes）
+- 📥 **多格式导入** — Word(.docx) / PDF / TXT / Markdown
+- 🎯 **三种模式** — 顺序 / 随机 / 错题重做
+- 📊 **学习统计** — 365 天热力图 / 正确率 / 连续天数
+- ⌨️ **快捷键** — ←→ / A-D / Enter / F / R / Esc
+- 🔄 **自动更新** — 一键升级到最新版本
+
+## 🖼️ 界面预览
+
+应用主界面、练习页、统计热力图、答题卡 logo 等。
+
+## 🔧 系统要求
+
+- Windows 10 / 11 (x64)
+- 约 50 MB 磁盘空间
+- 无需其他依赖（已内置 WebView2）
+
+## 📥 下载安装
+
+前往 [Releases 页面](https://github.com/MYT6666/shuati-bao/releases) 下载最新版：
+
+- **安装包**（推荐）：`刷题宝_0.1.0_x64-setup.exe`
+- **绿色版**：单文件 `tauri-app.exe`
+
+## 🚀 快速开始
+
+1. 下载安装包并运行
+2. 点击 **导入** → 选择 .docx / .pdf / .txt / .md 文件
+3. AI 自动解析题库（首次使用需在设置页配置 AI API Key）
+4. 选择题库 → 开始刷题
+5. 题目下方有导航条，点击切换题号
+6. 答错的题自动加入错题本
+
+### 配置 AI（可选）
+
+设置页 → AI 解析：
+- 智谱 AI：base_url = `https://open.bigmodel.cn/api/paas/v4`
+- DeepSeek：base_url = `https://api.deepseek.com`
+- Agnes：base_url = `https://api.agnes.cn/v1`
+
+## ⌨️ 快捷键
+
+| 键 | 作用 |
 |---|---|
-| 📥 **题库导入** | 拖入 .docx → 自动识别题号、选项、答案、解析、章节；支持本地正则引擎（秒级）和 AI 引擎（兼容智谱/DeepSeek/Agnes/OpenAI） |
-| 🎯 **4 种练习模式** | 顺序练习 / 随机练习 / 错题重练 / 模拟考试（60min 倒计时 + 自动交卷计分） |
-| ⏱ **单题计时** | 每题自动计时，统计答题用时 |
-| 🔖 **收藏 / 错题本** | 收藏喜欢的题，错题本可重练或标记"已掌握" |
-| 🔍 **题目搜索** | 练习页按题干关键词搜索 |
-| 🤖 **AI 单题解析** | 没解析的题可调用 AI 生成解析 |
-| 💾 **数据本地化** | SQLite 存题库 + 错题 + 收藏 + 设置；一键备份数据库 |
-| 🎨 **主题/字号** | 亮/暗/跟随系统三主题 + 小/中/大三档字号 |
-| ⌨️ **快捷键** | `1-4` 选项、`Enter` 确认、`← →` 翻页、`F` 收藏 |
-| 💝 **打赏作者** | 内置微信/支付宝收款码 |
+| ← / → | 上一题 / 下一题 |
+| A / B / C / D | 选择选项 |
+| Enter | 确认 / 下一题 |
+| F | 收藏 / 取消收藏 |
+| R | 重置 |
+| ? | 显示所有快捷键 |
 
-## 📦 下载
+## 🛠️ 技术栈
 
-前往 [Releases 页面](https://github.com/你的用户名/shuati-bao/releases) 下载最新的 `刷题宝_x.x.x_x64-setup.exe`（Windows 安装包，4.4MB）。
+- **前端**：Vue 3 + TypeScript + Vite
+- **后端**：Rust + Tauri 2
+- **数据库**：SQLite (本地存储)
+- **UI**：原生 CSS 变量主题（亮/暗）
 
-- 仅支持 Windows 10/11（64 位）
-- 系统需自带 **WebView2**（Win11 默认有，Win10 1803+ 也自带）
+## 📝 开源协议
 
-## 🚀 开发
+MIT License
 
-### 前置依赖
+## 💬 反馈
 
-- Node.js ≥ 18
-- Rust 工具链（含 `cargo`）
-- Microsoft Visual Studio Build Tools（含 C++ 桌面开发 + Windows SDK）
-- WebView2 Runtime（Win11 自带）
-
-### 本地开发
-
-```bash
-npm install
-npm run tauri dev
-```
-
-### 构建安装包
-
-```bash
-npm run tauri build -- --bundles nsis
-```
-
-构建产物：
-- 单文件 exe：`src-tauri/target/release/tauri-app.exe`（17MB）
-- NSIS 安装包：`src-tauri/target/release/bundle/nsis/刷题宝_x.x.x_x64-setup.exe`（4.4MB）
-
-## 🤖 AI 配置
-
-1. 打开"设置 → AI 识别引擎"
-2. 填入 API Key（智谱 GLM 送免费额度，DeepSeek 送 500 万 token）
-3. 点击下方任一推荐模型按钮，一键填入 Base URL + 模型名
-4. 点击"测试连接"验证
-
-**推荐模型**：
-- `glm-4-flash`（智谱，免费，速度快）
-- `deepseek-chat`（DeepSeek，500万 token 免费）
-- `agnes-2.0-flash`（Agnes，免费高并发）
-- `gpt-4o-mini`（OpenAI，付费但便宜）
-
-> ⚠ 不要用 `glm-4v`/`gpt-4o` 等视觉模型，纯文本任务慢 3-5 倍。
-
-## 📂 数据存储位置
-
-- 题库/错题/收藏：`%APPDATA%\com.shuati-bao.app\shuati.db`
-- 数据库备份：同上目录下的 `backups/` 文件夹
-- 调试日志：exe 同目录下的 `shuati-debug.log`
-
-## 🛠 技术栈
-
-- **前端**：Vue 3 + TypeScript + Pinia + Vue Router + Vite
-- **后端**：Tauri 2 + Rust
-- **数据库**：SQLite（rusqlite）
-- **打包**：Tauri Builder（NSIS 安装包）
-
-## 📝 路线图
-
-- 🖼 题干/选项图片渲染
-- 📊 统计可视化（正确率趋势、薄弱题型）
-- 📅 每日打卡热力图
-- 📤 题库导出为 CSV
-- 🏷 章节/知识点标签
-
-完整规划见 [`docs/优化清单.md`](docs/优化清单.md) 和 [`docs/功能缺口清单.md`](docs/功能缺口清单.md)。
-
-## 💝 支持作者
-
-刷题宝是个人业余时间开发的免费软件。如果它帮到了你，可以扫描应用内"支持作者"入口的微信/支付宝二维码支持一下 ❤️
-
-## 📄 License
-
-[MIT](LICENSE)
+欢迎提 Issue 或 PR！

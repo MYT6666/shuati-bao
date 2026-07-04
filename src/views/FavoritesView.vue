@@ -40,6 +40,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, Question } from '../utils/api'
+import { toastError } from '../utils/toast'
 import QuestionCard from '../components/QuestionCard.vue'
 
 const route = useRoute()
@@ -62,7 +63,7 @@ onMounted(async () => {
     allQuestions.value = await api.listQuestions(bankId)
     favoriteIds.value = await api.listFavorites(bankId)
   } catch (e) {
-    alert('加载收藏失败：' + (e instanceof Error ? e.message : String(e)))
+    toastError('加载收藏失败：' + (e instanceof Error ? e.message : String(e)))
   }
 })
 
@@ -158,7 +159,7 @@ async function clearAll() {
     practicing.value = false
     current.value = null
   } catch (e) {
-    alert('清空收藏失败：' + e)
+    toastError('清空收藏失败：' + (e instanceof Error ? e.message : String(e)))
   }
 }
 </script>
