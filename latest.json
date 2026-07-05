@@ -1,11 +1,11 @@
 {
-  "version": "0.1.1",
-  "notes": "## v0.1.1 更新\n\n- 更新应用图标（全平台）\n- 修复 WebView 缓存导致旧图标不刷新的问题\n- 修复 exe 文件图标不显示的问题（多尺寸 ICO 嵌入）\n- 修复 NSIS 安装器图标\n- 添加反馈功能",
-  "pub_date": "2026-07-05T04:29:30Z",
+  "version": "0.1.2",
+  "notes": "## v0.1.2 更新\n\n### 修复 Critical (9 个)\n- BUG-001: 导入流程非原子，新增 replace_bank_questions 单事务包裹\n- BUG-002: 空 HTML/题目未校验直接入库\n- BUG-003: init_db DDL 部分失败留半成品 schema\n- BUG-004: 考试倒计时 setInterval 后台被节流导致漂移\n- BUG-005: F 键在 QuestionCard 与 PracticeView 双触发\n- BUG-006: 路由参数变化组件复用不重载数据\n- BUG-007: ImportView AI 监听器局部变量泄漏\n- BUG-008: daily_records 读-改-写竞态导致统计丢失\n- BUG-009: 备份前未做 WAL checkpoint\n\n### 修复 High/Medium (9 个)\n- BUG-010: 错题答对后 status=resolved 导致题在错题本消失\n- BUG-011: 放回错题通过 recordPractice 污染统计\n- BUG-012: clear_bank_questions 缺事务包裹\n- BUG-013: 智谱并发数 6 超过 QPS=5 限制\n- BUG-014: import_with_ai 启动时无条件重置取消标志\n- BUG-015: 5 分钟超时分支未设置 cancel 标志\n- BUG-016: mark_wrong_mastered 未限定 status='pending'\n- BUG-017: normalize_answer 丢弃 A-D 之外的字母\n- BUG-018: 超时后进度事件重置 0/0 导致 UI 闪烁\n\n### 新增功能\n- ParseProfile 灵活解析系统，支持标准考试卷格式\n- 公式保护机制（LaTeX、化学式、上下标）\n- 端到端验证：724 题识别，99.6% 答案匹配率",
+  "pub_date": "2026-07-06T03:30:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "untrusted comment: shuati-bao updater\nRTlDKnh5eldFXNx7slPXUEcYxZRfIWGcDq27905Exh+ial0plgcqyuSipFEiFUnJfRjAUA/31/Xr1sKGAQH6Cg==\n",
-      "url": "https://github.com/MYT6666/shuati-bao/releases/download/v0.1.1/ShuatiBao_0.1.1_x64-setup.exe"
+      "signature": "untrusted comment: shuati-bao updater\n+wjyJ9qYyFPnksI11tY3IsU4FOovnLE6heqrMCIPTKpo3KPuwVAOzwbIuOHOehlM7o5dgHJ76P8qYNoxf1kJAQ==\n",
+      "url": "https://github.com/MYT6666/shuati-bao/releases/download/v0.1.2/ShuatiBao_0.1.2_x64-setup.exe"
     }
   }
 }
