@@ -93,9 +93,10 @@ pub fn record_practice(conn: &Connection, r: &PracticeRecord) -> Result<()> {
             params![r.bank_id, r.question_id, r.practiced_at],
         )?;
     } else {
-        // 答对则将错题状态置为 resolved（list_wrong 仅返回 status='pending'）
+        // BUG-010 修复：答对则将错题状态置为 mastered（旧值 resolved 在前端不可见，造成"题消失"）
+        // list_mastered 仅返回 status='mastered'，resolved 状态的题前后端均无法查看
         tx.execute(
-            "UPDATE wrong_questions SET status = 'resolved' WHERE bank_id = ?1 AND question_id = ?2",
+            "UPDATE wrong_questions SET status = 'mastered' WHERE bank_id = ?1 AND question_id = ?2 AND status = 'pending'",
             params![r.bank_id, r.question_id],
         )?;
     }
@@ -127,10 +128,23 @@ pub fn list_mastered(conn: &Connection, bank_id: i64) -> Result<Vec<WrongQuestio
 }
 
 /// P1-7: 标记错题为已掌握（status pending -> mastered）
+/// BUG-016 修复：限定 status='pending'，避免将 resolved/mastered 状态的题误改为 mastered
 pub fn mark_wrong_mastered(conn: &Connection, bank_id: i64, question_id: i64) -> Result<()> {
     conn.execute(
-        "UPDATE wrong_questions SET status='mastered' WHERE bank_id=?1 AND question_id=?2",
+        "UPDATE wrong_questions SET status='mastered' WHERE bank_id=?1 AND question_id=?2 AND status='pending'",
         params![bank_id, question_id],
+    )?;
+    Ok(())
+}
+
+/// BUG-011 修复：把已掌握的错题放回 pending 状态
+/// 旧实现通过 recordPractice(is_correct=false) 实现，会写入 practice_records 表，
+/// 污染 bank_stats 的 practiced/correct 统计。此函数仅更新 wrong_questions 状态，
+/// 不写入练习记录。
+pub fn restore_wrong_to_pending(conn: &Connection, bank_id: i64, question_id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE wrong_questions SET status='pending', last_wrong_at=?3 WHERE bank_id=?1 AND question_id=?2 AND status='mastered'",
+        params![bank_id, question_id, Utc::now().to_rfc3339()],
     )?;
     Ok(())
 }
@@ -159,8 +173,42 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
 }
 
 pub fn clear_bank_questions(conn: &Connection, bank_id: i64) -> anyhow::Result<()> {
-    conn.execute("DELETE FROM questions WHERE bank_id = ?1", params![bank_id])?;
-    conn.execute("UPDATE quiz_banks SET question_count = 0 WHERE id = ?1", params![bank_id])?;
+    // BUG-012 修复：用事务包裹 DELETE + UPDATE，避免部分失败导致数据不一致
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM questions WHERE bank_id = ?1", params![bank_id])?;
+    tx.execute("UPDATE quiz_banks SET question_count = 0 WHERE id = ?1", params![bank_id])?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// BUG-001 修复：原子替换题库题目（单事务包裹 DELETE + INSERT + UPDATE）
+///
+/// 旧实现先 clear_bank_questions 再 insert_questions，两步不在同一事务中，
+/// 若 insert 失败则旧题已删除、新题未插入，数据永久丢失。
+/// 此函数用单事务包裹，任一步失败整体回滚，保证数据一致性。
+pub fn replace_bank_questions(conn: &Connection, bank_id: i64, questions: &[Question]) -> anyhow::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    // 1. 删除旧题
+    tx.execute("DELETE FROM questions WHERE bank_id = ?1", params![bank_id])?;
+    // 2. 插入新题
+    for q in questions {
+        tx.execute(
+            "INSERT INTO questions (bank_id, type, stem, options, answer, analysis, source_index, confidence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![bank_id, q.q_type, q.stem, q.options, q.answer, q.analysis, q.source_index, q.confidence],
+        )?;
+    }
+    // 3. 更新题库计数
+    let count: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM questions WHERE bank_id=?1",
+        params![bank_id],
+        |r| r.get(0),
+    )?;
+    let now = Utc::now().to_rfc3339();
+    tx.execute(
+        "UPDATE quiz_banks SET question_count=?1, updated_at=?2 WHERE id=?3",
+        params![count, now, bank_id],
+    )?;
+    tx.commit()?;
     Ok(())
 }
 

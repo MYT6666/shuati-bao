@@ -183,9 +183,10 @@ async function markMastered(questionId: number) {
 }
 
 async function restoreToPending(questionId: number) {
-  // 把已掌握的题重新答错就能回 pending；这里通过 recordPractice(false) 实现
+  // BUG-011 修复：改用独立的 restore_wrong_to_pending 命令
+  // 旧实现通过 recordPractice(is_correct=false) 实现，会写入 practice_records 表污染统计
   try {
-    await api.recordPractice({ bank_id: bankId, question_id: questionId, user_answer: '', is_correct: false, duration_ms: null })
+    await api.restoreWrongToPending(bankId, questionId)
     await loadData()
   } catch (e) {
     toastError('放回失败：' + (e instanceof Error ? e.message : String(e)))

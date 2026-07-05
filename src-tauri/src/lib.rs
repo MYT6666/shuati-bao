@@ -75,6 +75,7 @@ pub fn run() {
             commands::practice::bank_stats,
             commands::practice::list_mastered,
             commands::practice::mark_wrong_mastered,
+            commands::practice::restore_wrong_to_pending,
             commands::import::import_from_html,
             commands::import::import_from_pdf,
             commands::import::import_with_ai,

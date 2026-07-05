@@ -2,7 +2,7 @@
   <div class="app">
     <aside class="sidebar">
       <div class="logo">
-        <img src="/logo-256.png?v=0.1.1" class="logo-img" alt="刷题宝" />
+        <img src="/logo-256.png?v=0.1.2" class="logo-img" alt="刷题宝" />
         <span>刷题宝</span>
       </div>
 
@@ -37,7 +37,7 @@
         </div>
       </div>
     </aside>
-    <main class="content"><RouterView /></main>
+    <main class="content"><RouterView :key="route.fullPath" /></main>
 
     <DonateDialog :visible="showDonate" @close="showDonate = false" />
     <FeedbackDialog :visible="showFeedback" @close="showFeedback = false" />

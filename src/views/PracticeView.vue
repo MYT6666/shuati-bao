@@ -246,6 +246,8 @@ const displayQuestions = computed(() => {
 // 模拟考试相关
 const EXAM_DURATION_SECS = 60 * 60 // 60 分钟
 const examRemainingSecs = ref(EXAM_DURATION_SECS)
+// BUG-004 修复：考试倒计时改用时间戳，避免后台/最小化时 setInterval 被节流导致漂移
+let examStartTimeMs: number | null = null
 const examSubmitted = ref(false)
 const examTimeUp = ref(false)
 let examTimerId: number | null = null
@@ -274,22 +276,43 @@ function formatExamTime(secs: number): string {
 
 function startExamTimer() {
   stopExamTimer()
+  // BUG-004 修复：记录开始时间戳，每次 tick 用时间差计算剩余秒数
+  // 旧实现用 setInterval 自减，后台标签页被节流会严重漂移
+  examStartTimeMs = Date.now()
   examRemainingSecs.value = EXAM_DURATION_SECS
   examTimeUp.value = false
-  examTimerId = window.setInterval(() => {
-    examRemainingSecs.value--
+  // tick 函数：基于时间戳计算剩余秒数
+  const tickExam = () => {
+    if (examStartTimeMs === null) return
+    const elapsed = Math.floor((Date.now() - examStartTimeMs) / 1000)
+    const remaining = EXAM_DURATION_SECS - elapsed
+    examRemainingSecs.value = remaining > 0 ? remaining : 0
     if (examRemainingSecs.value <= 0) {
       examRemainingSecs.value = 0
       examTimeUp.value = true
       submitExam()
     }
-  }, 1000)
+  }
+  // 切回可见时立即校正一次（处理后台节流期间的漂移）
+  const onVisible = () => {
+    if (document.visibilityState === 'visible') tickExam()
+  }
+  document.addEventListener('visibilitychange', onVisible)
+  ;(window as any).__examVisibilityHandler = onVisible
+  examTimerId = window.setInterval(tickExam, 1000)
 }
 function stopExamTimer() {
   if (examTimerId) {
     window.clearInterval(examTimerId)
     examTimerId = null
   }
+  // BUG-004 修复：清理 visibility 监听器
+  const handler = (window as any).__examVisibilityHandler
+  if (handler) {
+    document.removeEventListener('visibilitychange', handler)
+    ;(window as any).__examVisibilityHandler = null
+  }
+  examStartTimeMs = null
 }
 
 onMounted(async () => {
@@ -520,10 +543,10 @@ function onKeydown(e: KeyboardEvent) {
     showHelp.value = !showHelp.value
   } else if (e.key === 'Escape') {
     showHelp.value = false
-  } else if ((e.key === 'f' || e.key === 'F') && currentQuestion.value) {
-    e.preventDefault()
-    void onToggleFavorite()
   }
+  // BUG-005 修复：移除 F 键分支，由 QuestionCard 单独处理避免双触发
+  // 旧实现：父组件 onKeydown + 子组件 handleKeydown 都监听 window keydown，
+  // 按一次 F 收藏被切换两次，净效果为未变化
 }
 
 onBeforeUnmount(() => {
@@ -548,26 +571,34 @@ async function onAnswered(payload: { correct: boolean; answer: string; duration_
 }
 
 // 累加今日刷题记录到 settings.daily_records
-async function bumpDailyRecord(correct: boolean) {
-  try {
-    const raw = await api.getSetting('daily_records')
-    const records: { date: string; total: number; correct: number }[] = raw ? JSON.parse(raw) : []
-    const d = new Date()
-    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    const idx = records.findIndex(r => r.date === today)
-    if (idx >= 0) {
-      records[idx].total++
-      if (correct) records[idx].correct++
-    } else {
-      records.push({ date: today, total: 1, correct: correct ? 1 : 0 })
+// BUG-008 修复：加前端互斥锁，避免连续答题时 read-modify-write 竞态导致统计丢失
+// 旧实现：两次并发 bumpDailyRecord 都读到同一份 records，各自 +1 后写回，后写覆盖先写
+let bumpDailyRecordChain: Promise<void> = Promise.resolve()
+function bumpDailyRecord(correct: boolean): Promise<void> {
+  // 串行化：将每次调用接到 chain 末尾，保证不并发
+  const run = async () => {
+    try {
+      const raw = await api.getSetting('daily_records')
+      const records: { date: string; total: number; correct: number }[] = raw ? JSON.parse(raw) : []
+      const d = new Date()
+      const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      const idx = records.findIndex(r => r.date === today)
+      if (idx >= 0) {
+        records[idx].total++
+        if (correct) records[idx].correct++
+      } else {
+        records.push({ date: today, total: 1, correct: correct ? 1 : 0 })
+      }
+      // 只保留最近 400 天
+      const sorted = records.sort((a, b) => a.date.localeCompare(b.date))
+      const trimmed = sorted.slice(-400)
+      await api.setSetting('daily_records', JSON.stringify(trimmed))
+    } catch (e) {
+      console.error('更新每日统计失败：', e)
     }
-    // 只保留最近 400 天
-    const sorted = records.sort((a, b) => a.date.localeCompare(b.date))
-    const trimmed = sorted.slice(-400)
-    await api.setSetting('daily_records', JSON.stringify(trimmed))
-  } catch (e) {
-    console.error('更新每日统计失败：', e)
   }
+  bumpDailyRecordChain = bumpDailyRecordChain.then(run)
+  return bumpDailyRecordChain
 }
 
 // P1-10: 搜索题目，跳转到第一个匹配

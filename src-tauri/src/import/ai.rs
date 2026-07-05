@@ -67,14 +67,14 @@ const MAX_TOKENS: u32 = 2048;
 
 /// 根据 base_url 自动检测最佳并发数
 /// - agnes-ai.com: 16（免费高并发）
-/// - bigmodel.cn（智谱）: 6（免费版 QPS=5 略高一点靠重试兜底）
+/// - bigmodel.cn（智谱）: 4（BUG-013 修复：免费版 QPS=5，留 1 余量避免必然触发 429）
 /// - deepseek.com: 8
 /// - openai.com: 10
 /// - 默认: 6（安全值）
 fn detect_concurrency(base_url: &str) -> usize {
     let url = base_url.to_lowercase();
     if url.contains("agnes-ai.com") { 16 }
-    else if url.contains("bigmodel.cn") { 6 }
+    else if url.contains("bigmodel.cn") { 4 }
     else if url.contains("deepseek.com") { 8 }
     else if url.contains("openai.com") { 10 }
     else { 6 }
@@ -165,10 +165,11 @@ pub async fn ai_structurize(
                         let err_str = e.to_string();
                         eprintln!("[AI] 第 {}/{} 块第 {}/{} 次尝试失败: {}", i + 1, total_chunks, attempt, MAX_RETRIES, e);
                         last_err = Some(e);
-                        // 429 限流：等待 5 秒再重试；其他错误等 1 秒
+                        // BUG-013 修复：429 限流用指数退避（5s, 10s），其他错误等 1 秒
                         let backoff = if err_str.contains("429") || err_str.contains("Too Many Requests") || err_str.contains("rate") {
-                            eprintln!("[AI] 检测到限流，等待 5 秒后重试");
-                            5
+                            let secs = 5u64 * (2u64.pow((attempt - 1) as u32));
+                            eprintln!("[AI] 检测到限流，等待 {} 秒后重试", secs);
+                            secs
                         } else {
                             1
                         };

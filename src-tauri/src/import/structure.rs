@@ -16,6 +16,7 @@ static RE_ANS_EXTRACT: OnceLock<Regex> = OnceLock::new();
 static RE_PAREN_ANS: OnceLock<Regex> = OnceLock::new();
 static RE_CHAPTER: OnceLock<Regex> = OnceLock::new();
 static RE_SECTION: OnceLock<Regex> = OnceLock::new();
+static RE_SECTION_SOLO: OnceLock<Regex> = OnceLock::new();
 static RE_RANGE: OnceLock<Regex> = OnceLock::new();
 static RE_JUDGE_WORD: OnceLock<Regex> = OnceLock::new();
 static RE_INTRO: OnceLock<Regex> = OnceLock::new();
@@ -75,10 +76,19 @@ fn re_section() -> &'static Regex {
     })
 }
 
-/// range 格式：1-5 / 1—5. / 1–5 / 1～5
+/// 独立小节标题（无数号前缀，整行匹配）：单选题 / 多选题 / 判断题 / 单项选择题 / 多项选择题
+/// 用于答案区简写格式（如"第十五章"答案区直接用"单选题"作小节标题）
+fn re_section_solo() -> &'static Regex {
+    RE_SECTION_SOLO.get_or_init(|| {
+        Regex::new(r"^\s*(单项选择题|多项选择题|单选题|多选题|判断题)\s*$").unwrap()
+    })
+}
+
+/// range 格式：1-5 / 1—5. / 1–5 / 1～5 / 1——5（双 em-dash）
+/// 注意：+ 量词允许连续多个 dash 字符（如 "1——5"），匹配导论后章节答案区常见格式
 fn re_range() -> &'static Regex {
     RE_RANGE.get_or_init(|| {
-        Regex::new(r"(\d+)\s*[-—–~～]\s*(\d+)\s*[.、．:：]?").unwrap()
+        Regex::new(r"(\d+)\s*[-—–~～]+\s*(\d+)\s*[.、．:：]?").unwrap()
     })
 }
 
@@ -240,13 +250,32 @@ pub fn parse_questions(paragraphs: &[String]) -> Vec<ParsedQuestion> {
             }
             continue;
         }
+        // 独立小节标题检测（无数号前缀，如答案区简写"单选题"/"多选题"/"判断题"）
+        if let Some(caps) = re_section_solo().captures(para) {
+            current_section = match &caps[1] {
+                "单项选择题" | "单选题" => 1,
+                "多项选择题" | "多选题" => 2,
+                "判断题" => 3,
+                _ => 0,
+            };
+            if let Some(blocks) = current.take() {
+                if let Some(q) = build_question(&blocks, current_idx) {
+                    questions.push(q);
+                    questions_meta.push(current_meta);
+                }
+            }
+            continue;
+        }
 
         if !in_answer_section {
             // 内联答案行："答案：A" 或 "答案：1.A 2.B"（标题+多答案同行）
             if let Some(caps) = re_ans.captures(para) {
                 let after = caps[2].trim();
-                // after 含字母数字才可能是内联答案或标题+答案；纯标点（如"答案："）当标题
-                if after.chars().any(|c| c.is_alphanumeric()) {
+                // after 含字母数字或判断词（√/×/对/错等）才可能是内联答案或标题+答案；
+                // 纯标点（如"答案："）当标题。注意 √/× 非 alphanumeric，需额外判断。
+                let looks_like_answer = after.chars().any(|c| c.is_alphanumeric())
+                    || re_judge_word().is_match(after);
+                if looks_like_answer {
                     let mut tmp: HashMap<(usize, usize, usize), String> = HashMap::new();
                     if extract_answers_with_section(after, &mut tmp, current_chapter, current_section) {
                         // 标题后跟多个"题号.答案"，当作答案区开始
@@ -403,10 +432,10 @@ fn is_answer_header(line: &str) -> bool {
     if !has_kw {
         return false;
     }
-    // 排除内联答案（"答案：A"）—— 仅当 after 含字母数字才算内联答案
+    // 排除内联答案（"答案：A" / "答案：√"）—— after 含字母数字或判断词则算内联答案
     if let Some(caps) = re_ans().captures(line) {
         let after = caps[2].trim();
-        if after.chars().any(|c| c.is_alphanumeric()) {
+        if after.chars().any(|c| c.is_alphanumeric()) || re_judge_word().is_match(after) {
             return false;
         }
     }
@@ -636,8 +665,8 @@ pub(crate) fn extract_answers_with_section(
                 "extract_answers: range {}-{} expected {} but got {} (text={:?})",
                 start_num, end_num, expected, answers.len(), ans_text
             ));
-            // 仍记录 span，避免 individual 误匹配 range 内的数字
-            range_spans.push((m.start(), ans_end));
+            // 仅记录 range 匹配本身的 span（不含 ans_text），避免过度屏蔽 individual
+            range_spans.push((m.start(), m.end()));
             continue;
         }
 
@@ -646,14 +675,21 @@ pub(crate) fn extract_answers_with_section(
             map.insert((chapter, section, num), ans.clone());
             found = true;
         }
-        range_spans.push((m.start(), ans_end));
+        // 仅记录 range 匹配本身的 span：答案文本（字母/判断词）不会被 individual
+        // 正则（数字.答案）误匹配，因此无需屏蔽 ans_text 区域。这样 range 后跟随的
+        // individual 答案（如 "1-5 ABCCA 6.B 7.C"）也能被正确提取。
+        range_spans.push((m.start(), m.end()));
     }
 
-    // 2. 处理 individual 格式（跳过 range span 内的匹配）
+    // 2. 处理 individual 格式（跳过起始位置落在 range 匹配内的匹配）
+    // 注意：用 m.start() < e 而非 m.end() <= e，因为 individual 正则可能从 range
+    // 末尾数字开始匹配（如 "1—5.CACAC" 中的 "5.CACAC"），其 start 在 range span 内
+    // 但 end 超出 span。按 start 判断可正确跳过这类子匹配，同时不误伤 range 之后的
+    // individual 答案（如 "1-5 ABCCA 6.B" 中的 "6.B" 起始位置在 span 之外）。
     let re_ind = re_ans_extract();
     for caps in re_ind.captures_iter(text) {
         let m = caps.get(0).unwrap();
-        if range_spans.iter().any(|(s, e)| m.start() >= *s && m.end() <= *e) {
+        if range_spans.iter().any(|(s, e)| m.start() >= *s && m.start() < *e) {
             continue;
         }
         let idx: usize = match caps[1].parse() {
@@ -689,7 +725,8 @@ pub(crate) fn detect_type(stem: &str, options: &[String], answer: &Option<String
     }
     // 选择题：按答案数量区分单选/多选
     if let Some(ans) = answer {
-        let letters: Vec<char> = ans.chars().filter(|c| matches!(c, 'A'..='D' | 'a'..='d')).map(|c| c.to_ascii_uppercase()).collect();
+        // BUG-017 修复：支持 A-H 字母（部分考试有 5-8 选项题）
+        let letters: Vec<char> = ans.chars().filter(|c| matches!(c, 'A'..='H' | 'a'..='h')).map(|c| c.to_ascii_uppercase()).collect();
         if letters.len() > 1 { return QType::Multi; }
     }
     QType::Single
@@ -711,11 +748,182 @@ pub(crate) fn normalize_answer(ans: &str) -> String {
         _ => {}
     }
     // 多选答案如 "AC" → ["A","C"]
-    let letters: Vec<char> = trimmed.chars().filter(|c| matches!(c, 'A'..='D' | 'a'..='d')).map(|c| c.to_ascii_uppercase()).collect();
+    // BUG-017 修复：支持 A-H 字母（部分考试有 5-8 选项题）
+    let letters: Vec<char> = trimmed.chars().filter(|c| matches!(c, 'A'..='H' | 'a'..='h')).map(|c| c.to_ascii_uppercase()).collect();
     if letters.len() > 1 {
         return serde_json::to_string(&letters).unwrap_or_else(|_| trimmed.to_string());
     }
     trimmed.to_string()
+}
+
+// ============= 灵活解析方案入口 =============
+
+/// 公式占位符前缀（用于公式保护机制）
+const FORMULA_PLACEHOLDER_PREFIX: &str = "\u{0001}FORMULA";
+
+/// 还原公式占位符
+fn restore_formulas(text: &str, stash: &[String]) -> String {
+    let mut result = text.to_string();
+    for (idx, formula) in stash.iter().enumerate() {
+        let placeholder = format!("{}{}{}", FORMULA_PLACEHOLDER_PREFIX, idx, "\u{0001}");
+        result = result.replacen(&placeholder, formula, 1);
+    }
+    result
+}
+
+/// 全局公式保护正则集（与 default_profile 同步，避免每次编译）
+static FORMULA_PROTECT_CACHE: OnceLock<Vec<Regex>> = OnceLock::new();
+fn formula_protect_regexes() -> &'static Vec<Regex> {
+    FORMULA_PROTECT_CACHE.get_or_init(|| {
+        vec![
+            Regex::new(r"\$\$[^$]+\$\$").unwrap(),
+            Regex::new(r"\$[^$\n]+\$").unwrap(),
+            // 仅对带空格上下文或前导非字母的化学式生效，避免误伤 "1A" "2B" 等选项标记
+            // 简化策略：只保护 LaTeX 段和上下标，化学式靠选项拆分时的"前导非字母"校验天然过滤
+            Regex::new(r"[A-Za-z][\^_]\{[^}]*\}").unwrap(),
+            Regex::new(r"[A-Za-z][\^_][A-Za-z0-9]").unwrap(),
+        ]
+    })
+}
+
+/// 在调用 parse_questions 前对段落做公式保护，解析后还原到 stem/options/analysis
+///
+/// 策略：对所有段落联合保护公式（使用全局递增索引） → 调用 parse_questions → 对结果还原
+fn parse_questions_with_formula_protection(paragraphs: &[String]) -> Vec<ParsedQuestion> {
+    let re_regexes = formula_protect_regexes();
+
+    // 全局保护：所有段落共享一个 stash，索引全局递增
+    let mut global_stash: Vec<String> = Vec::new();
+    let protected_paras: Vec<String> = paragraphs
+        .iter()
+        .map(|p| {
+            let (prot, stash) = protect_formulas_with_global_stash(p, re_regexes, &mut global_stash);
+            prot
+        })
+        .collect();
+
+    // 调用现有解析器
+    let mut qs = parse_questions(&protected_paras);
+
+    // 还原 stem/options/analysis 中的占位符
+    for q in qs.iter_mut() {
+        q.stem = restore_formulas(&q.stem, &global_stash);
+        let restored_opts: Vec<String> = q
+            .options
+            .iter()
+            .map(|o| restore_formulas(o, &global_stash))
+            .collect();
+        q.options = restored_opts;
+        if let Some(a) = q.analysis.take() {
+            q.analysis = Some(restore_formulas(&a, &global_stash));
+        }
+    }
+
+    qs
+}
+
+/// 保护公式（使用外部全局 stash，索引全局递增）
+fn protect_formulas_with_global_stash(
+    text: &str,
+    patterns: &[regex::Regex],
+    global_stash: &mut Vec<String>,
+) -> (String, Vec<String>) {
+    let mut protected = text.to_string();
+    let mut local_stash: Vec<String> = Vec::new();
+    for re in patterns {
+        loop {
+            let captured = re.find(&protected).map(|m| m.as_str().to_string());
+            match captured {
+                Some(s) => {
+                    let idx = global_stash.len();
+                    global_stash.push(s.clone());
+                    local_stash.push(s.clone());
+                    let placeholder = format!("{}{}{}", FORMULA_PLACEHOLDER_PREFIX, idx, "\u{0001}");
+                    protected = protected.replacen(&s, &placeholder, 1);
+                }
+                None => break,
+            }
+        }
+    }
+    (protected, local_stash)
+}
+
+/// 使用指定 Profile 解析题目
+///
+/// 当前实现策略：
+/// - `default` profile → 公式保护 + 调用现有 parse_questions
+/// - `exam_paper` profile → 预处理转换考试卷格式为 default 兼容格式，再走公式保护 + parse_questions
+///
+/// 这样既能复用现有的稳健解析逻辑，又能扩展新格式支持。
+pub fn parse_questions_with_profile(
+    paragraphs: &[String],
+    profile: &crate::import::profile::ParseProfile,
+) -> Vec<ParsedQuestion> {
+    crate::dbg_log(&format!(
+        "parse_questions_with_profile: name={} paragraphs={}",
+        profile.name,
+        paragraphs.len()
+    ));
+
+    match profile.name.as_str() {
+        "exam_paper" => {
+            // 考试卷格式预处理：将 (1) 题号、A．全角点选项、含分值标题 转换为 default 兼容格式
+            let normalized = normalize_exam_paper(paragraphs);
+            parse_questions_with_formula_protection(&normalized)
+        }
+        _ => {
+            // default 及其他未知 profile：走公式保护 + 默认解析
+            parse_questions_with_formula_protection(paragraphs)
+        }
+    }
+}
+
+/// 自动探测格式并解析（推荐入口）
+///
+/// 内部调用 `crate::import::profile::detect_profile` 选择最佳 Profile，
+/// 然后委托给 `parse_questions_with_profile`。
+pub fn parse_questions_auto(paragraphs: &[String]) -> Vec<ParsedQuestion> {
+    let profile = crate::import::profile::detect_profile(paragraphs);
+    parse_questions_with_profile(paragraphs, &profile)
+}
+
+/// 考试卷格式归一化：转换为 default profile 兼容的格式
+///
+/// 转换规则：
+/// 1. `(1) 题目` → `1. 题目`
+/// 2. `（1）题目` → `1. 题目`
+/// 3. `A．选项` → `A.选项`（全角点→半角点+保留分隔）
+/// 4. `一、单项选择题（每题1分）` → `一、单项选择题`（去除分值后缀）
+/// 5. `答：A` → `答案：A`
+fn normalize_exam_paper(paragraphs: &[String]) -> Vec<String> {
+    let re_paren_num = Regex::new(r"^\s*[\(（](\d+)[\)）][\.\s]*").unwrap();
+    let re_fullwidth_opt = Regex::new(r"([A-D])．").unwrap();
+    let re_section_suffix = Regex::new(r"(单项选择|多项选择|单选|多选|判断|填空|简答|论述|名词解释|计算)题?[（(][^)）]*[)）]\s*$").unwrap();
+    let re_short_ans = Regex::new(r"(?i)^\s*答[:：]").unwrap();
+
+    paragraphs
+        .iter()
+        .map(|p| {
+            let mut s = p.clone();
+            // (1) → 1.
+            if let Some(caps) = re_paren_num.captures(&s) {
+                let num = &caps[1];
+                let rest = &s[caps.get(0).unwrap().end()..];
+                s = format!("{}. {}", num, rest);
+            }
+            // A． → A.
+            s = re_fullwidth_opt.replace_all(&s, "$1.").to_string();
+            // "一、单项选择题（每题1分）" → "一、单项选择题"
+            if re_section_suffix.is_match(&s) {
+                s = re_section_suffix.replace(&s, "$1").to_string();
+            }
+            // "答：A" → "答案：A"
+            if re_short_ans.is_match(&s) {
+                s = re_short_ans.replace(&s, "答案：").to_string();
+            }
+            s
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1150,6 +1358,53 @@ mod tests {
     }
 
     #[test]
+    fn test_range_answer_double_em_dash() {
+        // 双 em-dash 格式：1——5 BADAC（客观题.docx 第二章及以后答案区实际格式）
+        // 原 bug：range 正则只匹配单个 dash，1——5 因第二个 — 后非数字而整体失败，
+        // 导致第二章及以后所有答案未回填。
+        let paras = vec![
+            p("1. 题一？"),
+            p("A. a B. b C. c D. d"),
+            p("2. 题二？"),
+            p("A. a B. b C. c D. d"),
+            p("3. 题三？"),
+            p("A. a B. b C. c D. d"),
+            p("4. 题四？"),
+            p("A. a B. b C. c D. d"),
+            p("5. 题五？"),
+            p("A. a B. b C. c D. d"),
+            p("答案"),
+            p("1——5   BADAC     6——10   BBDCC"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 5);
+        assert_eq!(qs[0].answer.as_deref(), Some("B"));
+        assert_eq!(qs[1].answer.as_deref(), Some("A"));
+        assert_eq!(qs[2].answer.as_deref(), Some("D"));
+        assert_eq!(qs[3].answer.as_deref(), Some("A"));
+        assert_eq!(qs[4].answer.as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn test_range_double_em_dash_judge() {
+        // 双 em-dash 判断题：1——5对对对对错
+        let paras = vec![
+            p("1. 题一。"),
+            p("2. 题二。"),
+            p("3. 题三。"),
+            p("4. 题四。"),
+            p("5. 题五。"),
+            p("答案"),
+            p("1——5对对对对错      6——10错对对错错"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 5);
+        assert_eq!(qs[0].answer.as_deref(), Some("true"));
+        assert_eq!(qs[1].answer.as_deref(), Some("true"));
+        assert_eq!(qs[4].answer.as_deref(), Some("false"));
+    }
+
+    #[test]
     fn test_chapter_section_tracking() {
         // 多章节题号重复：每章有单选+判断两个小节，题号都从1开始
         // 答案区也按章节+小节分组（实际题库格式：参考答案后重复章节和小节标题）
@@ -1232,5 +1487,428 @@ mod tests {
         assert_eq!(qs[0].answer.as_deref(), Some("false"));
         assert_eq!(qs[3].answer.as_deref(), Some("true"));
         assert_eq!(qs[4].answer.as_deref(), Some("true"));
+    }
+
+    // ===== 回归测试：range 后跟随 individual 答案 =====
+
+    #[test]
+    fn test_range_then_individual_same_line() {
+        // 客观题.docx 第五章单选实际格式：
+        // "1-5 ABAAA   6-10 AAACC   11.B 12.A 13.D 14.B"
+        // 原 bug：6-10 的 ans_text 延伸到行尾，吞掉 11-14 的 individual 答案
+        let paras = vec![
+            p("1. 题一？"), p("A. a B. b C. c D. d"),
+            p("2. 题二？"), p("A. a B. b C. c D. d"),
+            p("3. 题三？"), p("A. a B. b C. c D. d"),
+            p("4. 题四？"), p("A. a B. b C. c D. d"),
+            p("5. 题五？"), p("A. a B. b C. c D. d"),
+            p("6. 题六？"), p("A. a B. b C. c D. d"),
+            p("7. 题七？"), p("A. a B. b C. c D. d"),
+            p("8. 题八？"), p("A. a B. b C. c D. d"),
+            p("9. 题九？"), p("A. a B. b C. c D. d"),
+            p("10. 题十？"), p("A. a B. b C. c D. d"),
+            p("11. 题十一？"), p("A. a B. b C. c D. d"),
+            p("12. 题十二？"), p("A. a B. b C. c D. d"),
+            p("13. 题十三？"), p("A. a B. b C. c D. d"),
+            p("14. 题十四？"), p("A. a B. b C. c D. d"),
+            p("参考答案"),
+            p("1-5 ABAAA   6-10 AAACC   11.B 12.A 13.D 14.B"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 14);
+        assert_eq!(qs[0].answer.as_deref(), Some("A"));
+        assert_eq!(qs[4].answer.as_deref(), Some("A"));
+        assert_eq!(qs[5].answer.as_deref(), Some("A"));
+        assert_eq!(qs[9].answer.as_deref(), Some("C"));
+        // 11-14 原本被 range span 吞掉，修复后应正确匹配
+        assert_eq!(qs[10].answer.as_deref(), Some("B"));
+        assert_eq!(qs[11].answer.as_deref(), Some("A"));
+        assert_eq!(qs[12].answer.as_deref(), Some("D"));
+        assert_eq!(qs[13].answer.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn test_range_then_individual_judge() {
+        // 判断题 range + individual：1-5.对对对对对     6.错 7.错 8.错
+        let paras = vec![
+            p("三、判断题"),
+            p("1. 题一。"), p("2. 题二。"), p("3. 题三。"),
+            p("4. 题四。"), p("5. 题五。"),
+            p("6. 题六。"), p("7. 题七。"), p("8. 题八。"),
+            p("答案"),
+            p("1-5. 对 对 错 对 对     6.错 7.错 8.错"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 8);
+        assert_eq!(qs[0].answer.as_deref(), Some("true"));
+        assert_eq!(qs[2].answer.as_deref(), Some("false"));
+        assert_eq!(qs[4].answer.as_deref(), Some("true"));
+        // 6-8 原本被吞，修复后应匹配
+        assert_eq!(qs[5].answer.as_deref(), Some("false"));
+        assert_eq!(qs[6].answer.as_deref(), Some("false"));
+        assert_eq!(qs[7].answer.as_deref(), Some("false"));
+    }
+
+    // ===== 回归测试：独立小节标题（无数号前缀）=====
+
+    #[test]
+    fn test_section_solo_header() {
+        // 第十五章答案区格式：章节标题后直接"单选题"/"多选题"/"判断题"（无数号）
+        let paras = vec![
+            p("第一章 概述"),
+            p("一、单选题"),
+            p("1. 题一？"), p("A. a B. b C. c D. d"),
+            p("2. 题二？"), p("A. a B. b C. c D. d"),
+            p("3. 题三？"), p("A. a B. b C. c D. d"),
+            p("4. 题四？"), p("A. a B. b C. c D. d"),
+            p("5. 题五？"), p("A. a B. b C. c D. d"),
+            p("参考答案"),
+            p("第一章 概述"),
+            p("单选题"),
+            p("1-5 DCBDD"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 5);
+        // 修复前：section 未识别（=0），答案 key=(1,0,1..5)，题目 meta=(1,1,1..5) 不匹配
+        // 修复后：独立"单选题"识别为 section=1，答案正确回填
+        assert_eq!(qs[0].answer.as_deref(), Some("D"));
+        assert_eq!(qs[1].answer.as_deref(), Some("C"));
+        assert_eq!(qs[4].answer.as_deref(), Some("D"));
+    }
+
+    // ===== 边界用例：特殊符号、公式、相似题目、多答案格式 =====
+
+    #[test]
+    fn test_stem_with_special_symbols() {
+        // 题干含特殊符号：引号、书名号、破折号、省略号、百分号
+        let paras = vec![
+            p("1. “一国两制”是邓小平同志提出的—也是《基本法》规定的…实现率100%。"),
+            p("A. 对 B. 错"),
+            p("答案：A"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0].options.len(), 2);
+        assert_eq!(qs[0].answer.as_deref(), Some("A"));
+        assert!(qs[0].stem.contains("“一国两制”"));
+    }
+
+    #[test]
+    fn test_stem_with_math_formula() {
+        // 题干含数学公式：a²+b²=c²、H₂O、±、≈、≠、≤、≥
+        let paras = vec![
+            p("1. 已知 a²+b²=c²，且 H₂O 的分子量≈18，则下列哪个正确？"),
+            p("A. a≠b B. a≤b C. a≥b D. a±b"),
+            p("答案：C"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0].options.len(), 4);
+        assert_eq!(qs[0].answer.as_deref(), Some("C"));
+        assert!(qs[0].stem.contains("a²+b²=c²"));
+    }
+
+    #[test]
+    fn test_similar_stems_different_answers() {
+        // 相似题干（仅差标点/空格）但答案不同，验证不会串扰
+        let paras = vec![
+            p("1. 中国的首都是哪里？"),
+            p("A. 上海 B. 北京 C. 广州 D. 深圳"),
+            p("答案：B"),
+            p("2. 中国的首都是哪里。"),
+            p("A. 上海 B. 北京 C. 广州 D. 深圳"),
+            p("答案：B"),
+            p("3. 中国的首都，是哪里？"),
+            p("A. 上海 B. 北京 C. 广州 D. 深圳"),
+            p("答案：B"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 3);
+        for q in &qs {
+            assert_eq!(q.answer.as_deref(), Some("B"));
+        }
+    }
+
+    #[test]
+    fn test_answer_format_variety() {
+        // 同一答案的多种表达方式：A / a / (A) / （A） / A. / 【A】
+        let cases = vec![
+            ("A", "A"),
+            ("a", "A"),
+            ("(A)", "A"),
+            ("（A）", "A"),
+        ];
+        for (raw, _expected) in cases {
+            let paras = vec![
+                p("1. 题一？"),
+                p("A. a B. b C. c D. d"),
+                p(&format!("答案：{}", raw)),
+            ];
+            let qs = parse_questions(&paras);
+            assert_eq!(qs.len(), 1);
+            assert!(qs[0].answer.is_some(), "raw={} 应识别到答案", raw);
+        }
+    }
+
+    #[test]
+    fn test_multi_answer_formats() {
+        // 多选答案的多种格式：AC / A、C / A,C / ABCD / A B C D（紧凑）
+        let paras = vec![
+            p("1. 多选一？"), p("A. a B. b C. c D. d"),
+            p("答案：AC"),
+            p("2. 多选二？"), p("A. a B. b C. c D. d"),
+            p("答案：A、C"),
+            p("3. 多选三？"), p("A. a B. b C. c D. d"),
+            p("答案：A,C"),
+            p("4. 多选四？"), p("A. a B. b C. c D. d"),
+            p("答案：ABCD"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 4);
+        for q in &qs {
+            assert_eq!(q.q_type, QType::Multi);
+            assert!(q.answer.is_some());
+        }
+        assert_eq!(qs[0].answer.as_deref(), Some("[\"A\",\"C\"]"));
+        assert_eq!(qs[3].answer.as_deref(), Some("[\"A\",\"B\",\"C\",\"D\"]"));
+    }
+
+    #[test]
+    fn test_judge_answer_variety() {
+        // 判断题答案多种表达：正确/对/√/T/true ↔ 错误/错/×/F/false
+        let true_words = vec!["正确", "对", "√", "T", "true"];
+        let false_words = vec!["错误", "错", "×", "F", "false"];
+        for w in &true_words {
+            let paras = vec![p("1. 题一。"), p(&format!("答案：{}", w))];
+            let qs = parse_questions(&paras);
+            assert_eq!(qs.len(), 1);
+            assert_eq!(qs[0].q_type, QType::Judge, "词={} 应识别为判断题", w);
+            assert_eq!(qs[0].answer.as_deref(), Some("true"), "词={} 应归一化为 true", w);
+        }
+        for w in &false_words {
+            let paras = vec![p("1. 题一。"), p(&format!("答案：{}", w))];
+            let qs = parse_questions(&paras);
+            assert_eq!(qs.len(), 1);
+            assert_eq!(qs[0].q_type, QType::Judge, "词={} 应识别为判断题", w);
+            assert_eq!(qs[0].answer.as_deref(), Some("false"), "词={} 应归一化为 false", w);
+        }
+    }
+
+    #[test]
+    fn test_fullwidth_parentheses_question() {
+        // 全角括号填空：（  ）/ （   ）/ \u3000（全角空格）
+        let paras = vec![
+            p("1. 坚持（　）是我们的国策。"),
+            p("A. 改革 B. 开放 C. 发展 D. 稳定"),
+            p("答案：B"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0].answer.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn test_question_with_inline_paren_answer() {
+        // 答案写在题干括号里：（B）是… → 提取答案并从题干移除括号
+        let paras = vec![
+            p("1. （ B ）是我国的首都。"),
+            p("A. 上海 B. 北京 C. 广州 D. 深圳"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0].answer.as_deref(), Some("B"));
+        // 括号答案应从题干移除，避免练习时暴露答案
+        assert!(!qs[0].stem.contains("B）"));
+        assert!(qs[0].stem.contains("首都"));
+    }
+
+    // ============= 灵活解析方案测试 =============
+
+    #[test]
+    fn test_parse_questions_with_default_profile_unchanged() {
+        // 验证传入 default profile 时与原 parse_questions 行为一致
+        let paras = vec![
+            p("1. 题目一内容？"),
+            p("A. 选项A"),
+            p("B. 选项B"),
+            p("C. 选项C"),
+            p("D. 选项D"),
+            p("答案：A"),
+        ];
+        let profile = crate::import::profile::default_profile();
+        let qs1 = parse_questions(&paras);
+        let qs2 = parse_questions_with_profile(&paras, &profile);
+        assert_eq!(qs1.len(), qs2.len());
+        assert_eq!(qs2[0].stem, qs1[0].stem);
+        assert_eq!(qs2[0].answer, qs1[0].answer);
+    }
+
+    #[test]
+    fn test_parse_questions_auto_detects_default() {
+        let paras = vec![
+            p("导论"),
+            p("一、单项选择题"),
+            p("1. 题目内容"),
+            p("A. 选项A"),
+            p("B. 选项B"),
+            p("答案：A"),
+            p("第一章 引言"),
+            p("1-5 ABCDA"),
+        ];
+        let qs = parse_questions_auto(&paras);
+        assert!(!qs.is_empty());
+        assert_eq!(qs[0].answer.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn test_exam_paper_paren_number() {
+        // 考试卷格式：(1) 题号 / A．全角点选项 / 含分值标题
+        let paras = vec![
+            p("一、单项选择题（每题1分，共20分）"),
+            p("(1) 题目内容？"),
+            p("A．选项A"),
+            p("B．选项B"),
+            p("C．选项C"),
+            p("D．选项D"),
+            p("答案：A"),
+            p("(2) 第二题"),
+            p("A．选项A"),
+            p("B．选项B"),
+            p("C．选项C"),
+            p("D．选项D"),
+            p("答案：B"),
+        ];
+        let profile = crate::import::profile::exam_paper_profile();
+        let qs = parse_questions_with_profile(&paras, &profile);
+        assert_eq!(qs.len(), 2, "应识别 2 题，实际 {}", qs.len());
+        assert_eq!(qs[0].answer.as_deref(), Some("A"));
+        assert_eq!(qs[1].answer.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn test_exam_paper_fullwidth_dot_options() {
+        // 全角点．选项应被正确切分
+        let paras = vec![
+            p("1. 题目？"),
+            p("A．选项一"),
+            p("B．选项二"),
+            p("C．选项三"),
+            p("D．选项四"),
+            p("答：C"),
+        ];
+        let profile = crate::import::profile::exam_paper_profile();
+        let qs = parse_questions_with_profile(&paras, &profile);
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0].options.len(), 4);
+        assert_eq!(qs[0].answer.as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn test_math_formula_protection() {
+        // 题干含 LaTeX 公式：$E=mc^2$ 不应被选项拆分误识别
+        let paras = vec![
+            p("1. 爱因斯坦质能方程 $E=mc^2$ 中，c 表示什么？"),
+            p("A. 光速 B. 时间 C. 质量 D. 能量"),
+            p("答案：A"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 1);
+        // 题干应完整保留公式
+        assert!(qs[0].stem.contains("E=mc^2"), "题干应含公式，实际: {}", qs[0].stem);
+        assert_eq!(qs[0].options.len(), 4);
+    }
+
+    #[test]
+    fn test_chemical_formula_not_split_as_option() {
+        // 化学式 H2O 不应被误识别为选项 H2 + O
+        let paras = vec![
+            p("1. 水的化学式是 H2O，下列正确的是？"),
+            p("A. H2O 由氢氧组成"),
+            p("B. H2O 是单质"),
+            p("C. H2O 不存在"),
+            p("D. H2O 是混合物"),
+            p("答案：A"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0].options.len(), 4);
+        assert!(qs[0].stem.contains("H2O"));
+    }
+
+    #[test]
+    fn test_superscript_subscript_preserved() {
+        // 上下标 x^2 / x_n 应被保留
+        let paras = vec![
+            p("1. 函数 y = x^2 + 2x + 1 的对称轴是？"),
+            p("A. x = 1"),
+            p("B. x = -1"),
+            p("C. x = 0"),
+            p("D. x = 2"),
+            p("答案：B"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 1);
+        assert!(qs[0].stem.contains("x^2"), "题干应保留 x^2，实际: {}", qs[0].stem);
+        assert_eq!(qs[0].options.len(), 4);
+    }
+
+    #[test]
+    fn test_latex_block_formula_preserved() {
+        // 块级 LaTeX $$...$$ 应被完整保留
+        let paras = vec![
+            p("1. 已知 $$\\frac{a}{b} = \\frac{c}{d}$$，求比例关系。"),
+            p("A. a/b = c/d"),
+            p("B. a*d = b*c"),
+            p("C. a*c = b*d"),
+            p("D. 无关系"),
+            p("答案：B"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 1);
+        assert!(qs[0].stem.contains("frac"), "题干应保留 LaTeX 命令，实际: {}", qs[0].stem);
+    }
+
+    #[test]
+    fn test_exam_paper_mixed_types() {
+        // 考试卷混合题型（单选+多选+判断）
+        let paras = vec![
+            p("一、单项选择题（每题1分）"),
+            p("(1) 单选题目一"),
+            p("A．甲 B．乙 C．丙 D．丁"),
+            p("答案：A"),
+            p("二、多项选择题（每题2分）"),
+            p("(2) 多选题目一"),
+            p("A．甲 B．乙 C．丙 D．丁"),
+            p("答案：AB"),
+            p("三、判断题（每题1分）"),
+            p("(3) 判断题目一"),
+            p("答案：正确"),
+        ];
+        let profile = crate::import::profile::exam_paper_profile();
+        let qs = parse_questions_with_profile(&paras, &profile);
+        assert_eq!(qs.len(), 3, "应识别 3 题，实际 {}", qs.len());
+        assert_eq!(qs[0].q_type, QType::Single);
+        assert_eq!(qs[1].q_type, QType::Multi);
+        assert_eq!(qs[2].q_type, QType::Judge);
+        assert_eq!(qs[2].answer.as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn test_similar_stems_with_formulas_distinguished() {
+        // 相似公式题目应被正确区分（不串扰答案）
+        let paras = vec![
+            p("1. 求 y = x^2 在 x=1 处的导数"),
+            p("A. 1 B. 2 C. 0 D. -1"),
+            p("答案：B"),
+            p("2. 求 y = x^3 在 x=1 处的导数"),
+            p("A. 1 B. 2 C. 3 D. -3"),
+            p("答案：C"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 2);
+        assert_eq!(qs[0].answer.as_deref(), Some("B"));
+        assert_eq!(qs[1].answer.as_deref(), Some("C"));
+        assert!(qs[0].stem.contains("x^2"));
+        assert!(qs[1].stem.contains("x^3"));
     }
 }

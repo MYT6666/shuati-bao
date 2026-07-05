@@ -19,29 +19,34 @@ pub struct ImportResult {
 #[tauri::command]
 pub fn import_from_html(app: AppHandle, db: State<'_, DbState>, bank_id: i64, html: String) -> anyhow::Result<i64, String> {
     crate::dbg_log(format!("import_from_html_start bank_id={} html_len={}", bank_id, html.len()));
-    // P0 数据安全：导入前自动备份
-    let _ = crate::commands::settings::auto_backup_before_import(&app);
+    // BUG-002 修复：空 HTML 校验，避免清空题库
+    if html.trim().is_empty() {
+        crate::dbg_log("  html_empty_rejected");
+        return Err("导入内容为空".to_string());
+    }
+    // P0 数据安全：导入前自动备份（BUG-009 修复：传入 db state 做 checkpoint）
+    let _ = crate::commands::settings::auto_backup_before_import(&app, Some(&db));
     crate::dbg_log("  html_to_questions_begin");
     let questions = html_to_questions(&html, bank_id).map_err(|e| {
         crate::dbg_log(format!("  html_to_questions_error: {}", e));
         e.to_string()
     })?;
     crate::dbg_log(format!("  html_to_questions_done count={}", questions.len()));
+    // BUG-002 修复：未识别到题目时拒绝导入，避免清空旧题
+    if questions.is_empty() {
+        crate::dbg_log("  no_questions_rejected");
+        return Err("未识别到任何题目，已取消导入".to_string());
+    }
     let count = questions.len() as i64;
     crate::dbg_log("  db_lock_acquire");
     let conn = db.0.lock().map_err(|e| {
         crate::dbg_log(format!("  db_lock_error: {}", e));
         e.to_string()
     })?;
-    crate::dbg_log("  clear_bank_questions_begin");
-    // 先清空旧题目（避免重复导入堆积）
-    repo::clear_bank_questions(&conn, bank_id).map_err(|e| {
-        crate::dbg_log(format!("  clear_bank_questions_error: {}", e));
-        e.to_string()
-    })?;
-    crate::dbg_log("  insert_questions_begin");
-    repo::insert_questions(&conn, bank_id, &questions).map_err(|e| {
-        crate::dbg_log(format!("  insert_questions_error: {}", e));
+    // BUG-001 修复：使用 replace_bank_questions 单事务原子替换
+    crate::dbg_log("  replace_bank_questions_begin");
+    repo::replace_bank_questions(&conn, bank_id, &questions).map_err(|e| {
+        crate::dbg_log(format!("  replace_bank_questions_error: {}", e));
         e.to_string()
     })?;
     crate::dbg_log(format!("import_from_html_done count={}", count));
@@ -52,8 +57,8 @@ pub fn import_from_html(app: AppHandle, db: State<'_, DbState>, bank_id: i64, ht
 #[tauri::command]
 pub fn import_from_pdf(app: AppHandle, db: State<'_, DbState>, bank_id: i64, path: String) -> anyhow::Result<i64, String> {
     crate::dbg_log(format!("import_from_pdf_start bank_id={} path={}", bank_id, path));
-    // P0 数据安全：导入前自动备份
-    let _ = crate::commands::settings::auto_backup_before_import(&app);
+    // P0 数据安全：导入前自动备份（BUG-009 修复：传入 db state 做 checkpoint）
+    let _ = crate::commands::settings::auto_backup_before_import(&app, Some(&db));
 
     // 1. 用 lopdf 提取文本
     let html = crate::import::pdf::pdf_to_html(&path).map_err(|e| {
@@ -62,16 +67,25 @@ pub fn import_from_pdf(app: AppHandle, db: State<'_, DbState>, bank_id: i64, pat
     })?;
     crate::dbg_log(format!("  pdf_to_html_done html_len={}", html.len()));
 
+    // BUG-002 修复：PDF 解析后内容为空校验
+    if html.trim().is_empty() {
+        return Err("PDF 未提取到任何文本内容".to_string());
+    }
+
     // 2. 复用 import_from_html 走结构化识别入库
     crate::dbg_log("  reuse_import_from_html_begin");
     let questions = crate::import::pipeline::html_to_questions(&html, bank_id).map_err(|e| {
         crate::dbg_log(format!("  html_to_questions_error: {}", e));
         e.to_string()
     })?;
+    // BUG-002 修复：未识别到题目时拒绝导入
+    if questions.is_empty() {
+        return Err("PDF 中未识别到任何题目，已取消导入".to_string());
+    }
     let count = questions.len() as i64;
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    repo::clear_bank_questions(&conn, bank_id).map_err(|e| e.to_string())?;
-    repo::insert_questions(&conn, bank_id, &questions).map_err(|e| e.to_string())?;
+    // BUG-001 修复：使用原子替换
+    repo::replace_bank_questions(&conn, bank_id, &questions).map_err(|e| e.to_string())?;
     crate::dbg_log(format!("import_from_pdf_done count={}", count));
     Ok(count)
 }
@@ -108,8 +122,8 @@ pub async fn import_with_ai(
     text: String,
 ) -> anyhow::Result<ImportResult, String> {
     crate::dbg_log(format!("import_with_ai_start bank_id={} text_len={}", bank_id, text.len()));
-    // P0 数据安全：导入前自动备份
-    let _ = crate::commands::settings::auto_backup_before_import(&app);
+    // P0 数据安全：导入前自动备份（BUG-009 修复：传入 db state 做 checkpoint）
+    let _ = crate::commands::settings::auto_backup_before_import(&app, Some(&db));
     let (api_key, base_url, model) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
         let key = repo::get_setting(&conn, "ai_api_key").map_err(|e| e.to_string())?.ok_or("未配置 AI Key")?;
@@ -119,8 +133,14 @@ pub async fn import_with_ai(
     };
     crate::dbg_log(format!("  settings_loaded model={}", model));
 
-    // 重置取消标志
-    flag.0.store(false, Ordering::SeqCst);
+    // BUG-014 修复：检查取消标志是否已被用户在 testAiConnection 阶段设置
+    // 旧实现无条件重置 flag=false，导致用户在连接测试阶段点取消的意图被丢失
+    // 用 swap 原子地"读取并重置"：若用户已取消则返回错误，否则重置为 false 供本次 AI 流程使用
+    let was_cancelled = flag.0.swap(false, Ordering::SeqCst);
+    if was_cancelled {
+        crate::dbg_log("  cancelled_before_ai_start");
+        return Err("用户已取消导入".to_string());
+    }
     let cancel = flag.0.clone();
 
     // 预估题数
@@ -144,12 +164,15 @@ pub async fn import_with_ai(
         let questions: Vec<crate::db::models::Question> = local_qs.into_iter().map(|pq| {
             crate::import::pipeline::to_question(pq, bank_id)
         }).collect();
+        // BUG-002 修复：本地结果为空时拒绝导入
+        if questions.is_empty() {
+            return Err("本地引擎未识别到任何题目".to_string());
+        }
         let count = questions.len() as i64;
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        // 先清空旧题目（避免重复导入堆积）
-        repo::clear_bank_questions(&conn, bank_id).map_err(|e| e.to_string())?;
-        crate::dbg_log("  local_clear_done");
-        repo::insert_questions(&conn, bank_id, &questions).map_err(|e| e.to_string())?;
+        // BUG-001 修复：使用原子替换
+        repo::replace_bank_questions(&conn, bank_id, &questions).map_err(|e| e.to_string())?;
+        crate::dbg_log("  local_replace_done");
         crate::dbg_log(format!("import_with_ai_done(local) count={}", count));
         return Ok(ImportResult { count, expected });
     }
@@ -175,11 +198,20 @@ pub async fn import_with_ai(
     crate::dbg_log("  ai_structurize_begin");
     let ai_result = tokio::time::timeout(
         Duration::from_secs(300),
-        crate::import::ai::ai_structurize(&text, &api_key, &base_url, &model, Some(tx), cancel)
+        crate::import::ai::ai_structurize(&text, &api_key, &base_url, &model, Some(tx), cancel.clone())
     ).await;
     crate::dbg_log("  ai_structurize_returned");
 
-    let _ = app.emit("ai_progress", serde_json::json!({ "done": 0, "total": 0 }));
+    // BUG-015 修复：超时分支必须设置 cancel 标志，让仍在后台运行的 spawn 任务感知到取消
+    // tokio::time::timeout 只让外层 await 返回 Err(Elapsed)，不会取消 spawn 出去的子任务
+    // 若不设置 cancel，后台任务会继续请求 AI API 消耗配额，结果被丢弃
+    if ai_result.is_err() {
+        cancel.store(true, Ordering::SeqCst);
+        crate::dbg_log("  timeout_set_cancel_flag");
+    }
+
+    // BUG-018 修复：进度事件保留 total 而非重置 0/0，避免 UI 闪烁
+    let _ = app.emit("ai_progress", serde_json::json!({ "done": 1, "total": 1 }));
 
     let qs = match ai_result {
         Ok(Ok(qs)) => {
@@ -192,11 +224,14 @@ pub async fn import_with_ai(
             let questions: Vec<crate::db::models::Question> = local_qs.into_iter().map(|pq| {
                 crate::import::pipeline::to_question(pq, bank_id)
             }).collect();
+            // BUG-002 修复：本地兜底也为空时拒绝导入
+            if questions.is_empty() {
+                return Err(format!("AI 解析失败且本地引擎未识别到题目：{}", e));
+            }
             let count = questions.len() as i64;
             let conn = db.0.lock().map_err(|e| e.to_string())?;
-            // 先清空旧题目（避免重复导入堆积）
-            repo::clear_bank_questions(&conn, bank_id).map_err(|e| e.to_string())?;
-            repo::insert_questions(&conn, bank_id, &questions).map_err(|e| e.to_string())?;
+            // BUG-001 修复：使用原子替换
+            repo::replace_bank_questions(&conn, bank_id, &questions).map_err(|e| e.to_string())?;
             crate::dbg_log(format!("import_with_ai_done(ai_err_fallback) count={}", count));
             return Ok(ImportResult { count, expected });
         }
@@ -206,11 +241,14 @@ pub async fn import_with_ai(
             let questions: Vec<crate::db::models::Question> = local_qs.into_iter().map(|pq| {
                 crate::import::pipeline::to_question(pq, bank_id)
             }).collect();
+            // BUG-002 修复：超时兜底也为空时拒绝导入
+            if questions.is_empty() {
+                return Err("AI 解析超时且本地引擎未识别到题目".to_string());
+            }
             let count = questions.len() as i64;
             let conn = db.0.lock().map_err(|e| e.to_string())?;
-            // 先清空旧题目（避免重复导入堆积）
-            repo::clear_bank_questions(&conn, bank_id).map_err(|e| e.to_string())?;
-            repo::insert_questions(&conn, bank_id, &questions).map_err(|e| e.to_string())?;
+            // BUG-001 修复：使用原子替换
+            repo::replace_bank_questions(&conn, bank_id, &questions).map_err(|e| e.to_string())?;
             crate::dbg_log(format!("import_with_ai_done(ai_timeout_fallback) count={}", count));
             return Ok(ImportResult { count, expected });
         }
@@ -219,10 +257,13 @@ pub async fn import_with_ai(
     let questions: Vec<crate::db::models::Question> = qs.into_iter().map(|pq| {
         crate::import::pipeline::to_question(pq, bank_id)
     }).collect();
+    // BUG-002 修复：AI 结果为空时拒绝导入
+    if questions.is_empty() {
+        return Err("AI 未识别到任何题目".to_string());
+    }
     let count = questions.len() as i64;
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    // 先清空旧题目（避免重复导入堆积）
-    repo::clear_bank_questions(&conn, bank_id).map_err(|e| e.to_string())?;
-    repo::insert_questions(&conn, bank_id, &questions).map_err(|e| e.to_string())?;
+    // BUG-001 修复：使用原子替换
+    repo::replace_bank_questions(&conn, bank_id, &questions).map_err(|e| e.to_string())?;
     Ok(ImportResult { count, expected })
 }

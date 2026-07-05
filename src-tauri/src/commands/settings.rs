@@ -214,11 +214,17 @@ pub fn ocr_available() -> bool {
 
 /// P2-18/P0 数据安全：手动备份当前数据库到 backups/ 目录
 #[tauri::command]
-pub fn backup_database(app: AppHandle) -> anyhow::Result<String, String> {
+pub fn backup_database(app: AppHandle, db: State<'_, DbState>) -> anyhow::Result<String, String> {
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let src = app_data.join("shuati.db");
     if !src.exists() {
         return Err("数据库文件不存在".to_string());
+    }
+    // BUG-009 修复：复制前强制 WAL checkpoint，确保最新数据已刷盘到主 db 文件
+    // 旧实现直接 std::fs::copy 只复制主 db，不复制 wal/shm，备份是旧数据
+    {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").map_err(|e| e.to_string())?;
     }
     let backups_dir = app_data.join("backups");
     std::fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
@@ -233,11 +239,25 @@ pub fn backup_database(app: AppHandle) -> anyhow::Result<String, String> {
 }
 
 /// P0 数据安全：导入前自动备份（保留最近 5 个）
-pub fn auto_backup_before_import(app: &AppHandle) -> anyhow::Result<()> {
+/// BUG-009 修复：复制前强制 WAL checkpoint
+pub fn auto_backup_before_import(app: &AppHandle, db: Option<&crate::db::DbState>) -> anyhow::Result<()> {
     let app_data = app.path().app_data_dir()?;
     let src = app_data.join("shuati.db");
     if !src.exists() {
         return Ok(());
+    }
+    // BUG-009 修复：复制前强制 WAL checkpoint
+    if let Some(db_state) = db {
+        // 注意：MutexGuard<Connection> 不是 Send，不能用 ? 转换到 anyhow::Error
+        // 使用 map_err 转字符串避免 Send/Sync 约束问题
+        if let Ok(conn) = db_state.0.lock() {
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        }
+    } else {
+        // 无 DbState 时尝试临时连接做 checkpoint
+        if let Ok(conn) = rusqlite::Connection::open(&src) {
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        }
     }
     let backups_dir = app_data.join("backups");
     std::fs::create_dir_all(&backups_dir)?;

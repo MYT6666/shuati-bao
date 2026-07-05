@@ -213,7 +213,21 @@ function stopTimer() {
   if (timerId) { window.clearInterval(timerId); timerId = null }
 }
 
-onUnmounted(() => stopTimer())
+// BUG-007 修复：将 AI 进度监听器提升为组件级，组件卸载时统一清理
+// 旧实现中 unlisten 是 runImport 内的局部变量，若用户在 AI 导入过程中离开页面，
+// 监听器不会被释放，导致内存泄漏与对已销毁组件的状态更新
+let aiProgressUnlisten: (() => void) | null = null
+function clearAiProgressListener() {
+  if (aiProgressUnlisten) {
+    try { aiProgressUnlisten() } catch (_) { /* ignore */ }
+    aiProgressUnlisten = null
+  }
+}
+
+onUnmounted(() => {
+  stopTimer()
+  clearAiProgressListener()
+})
 
 onMounted(async () => {
   if (!bankId.value) {
@@ -265,9 +279,10 @@ async function runImport(filePath: string) {
   startTimer()
 
   // 监听 AI 进度事件
-  let unlisten: (() => void) | null = null
+  // BUG-007 修复：复用组件级 aiProgressUnlisten，避免泄漏
+  clearAiProgressListener()
   if (engine.value === 'ai') {
-    unlisten = await listen<{ done: number; total: number }>('ai_progress', (e) => {
+    aiProgressUnlisten = await listen<{ done: number; total: number }>('ai_progress', (e) => {
       progress.value = e.payload
       if (e.payload.total > 0) {
         status.value = `AI 识别中... 第 ${e.payload.done}/${e.payload.total} 块`
@@ -323,7 +338,7 @@ async function runImport(filePath: string) {
       stage.value = 'done'
       stopTimer()
       importWarning.value = cnt === 0 ? '未识别到题目，请检查 PDF 是否含可选中文本（扫描件无法识别）。' : ''
-      if (unlisten) unlisten()
+      clearAiProgressListener()
       return
     } else {
       // txt / md 等纯文本
@@ -375,7 +390,7 @@ async function runImport(filePath: string) {
     dbg('step3_switch_start')
     step.value = 3
     dbg('step3_switch_done')
-    if (unlisten) unlisten()
+    clearAiProgressListener()
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     dbg('pickFile_error', { msg, cancelling: cancelling.value, stack: e instanceof Error ? e.stack : undefined })
@@ -388,7 +403,7 @@ async function runImport(filePath: string) {
     stopTimer()
     cancelling.value = false
   } finally {
-    if (unlisten) unlisten()
+    clearAiProgressListener()
   }
 }
 

@@ -36,6 +36,7 @@ export const api = {
   listWrong: (bankId: number) => invoke<number[]>('list_wrong', { bankId }),
   listMastered: (bankId: number) => invoke<number[]>('list_mastered', { bankId }),
   markWrongMastered: (bankId: number, questionId: number) => invoke<void>('mark_wrong_mastered', { bankId, questionId }),
+  restoreWrongToPending: (bankId: number, questionId: number) => invoke<void>('restore_wrong_to_pending', { bankId, questionId }),
   bankStats: (bankId: number) => invoke<{ total: number; practiced: number; correct: number }>('bank_stats', { bankId }),
   getSetting: (key: string) => invoke<string | null>('get_setting', { key }),
   setSetting: (key: string, value: string) => invoke<void>('set_setting', { key, value }),

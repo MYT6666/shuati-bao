@@ -34,3 +34,10 @@ pub fn mark_wrong_mastered(db: State<'_, DbState>, bank_id: i64, question_id: i6
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     repo::mark_wrong_mastered(&conn, bank_id, question_id).map_err(|e| e.to_string())
 }
+
+/// BUG-011 修复：把已掌握的错题放回 pending（不污染 practice_records 统计）
+#[tauri::command]
+pub fn restore_wrong_to_pending(db: State<'_, DbState>, bank_id: i64, question_id: i64) -> anyhow::Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    repo::restore_wrong_to_pending(&conn, bank_id, question_id).map_err(|e| e.to_string())
+}

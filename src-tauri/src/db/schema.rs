@@ -74,7 +74,13 @@ fn migrations() -> Vec<(&'static str, &'static str)> {
 }
 
 pub fn init_db(conn: &rusqlite::Connection) -> anyhow::Result<()> {
-    conn.execute_batch(CREATE_TABLES_SQL)?;
+    // BUG-003 修复：用事务包裹建表语句，DDL 部分失败时整体回滚
+    // 旧实现 execute_batch 隐式提交前 N 张表，第 N+1 张失败时数据库处于半迁移状态
+    {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(CREATE_TABLES_SQL)?;
+        tx.commit()?;
+    }
     run_migrations(conn)?;
     Ok(())
 }

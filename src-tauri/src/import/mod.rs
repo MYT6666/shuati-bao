@@ -4,3 +4,4 @@ pub mod pipeline;
 pub mod ocr;
 pub mod ai;
 pub mod pdf;
+pub mod profile;
