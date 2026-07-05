@@ -79,6 +79,14 @@
       <div v-if="showUpdateLog" class="update-log">
         <h4>更新日志</h4>
         <div class="log-entry">
+          <span class="log-version">v0.1.1</span>
+          <ul>
+            <li>更新应用图标（全平台）</li>
+            <li>修复 WebView 缓存导致旧图标不刷新的问题</li>
+            <li>修复 exe 文件图标不显示的问题（多尺寸 ICO 嵌入）</li>
+          </ul>
+        </div>
+        <div class="log-entry">
           <span class="log-version">v0.1.0</span>
           <ul>
             <li>首次发布</li>
@@ -133,7 +141,19 @@
       </button>
     </section>
 
+    <section class="feedback-section">
+      <h3>意见反馈</h3>
+      <p class="hint">
+        遇到 Bug？想要新功能？有其他建议？<br />
+        点击下方按钮告诉我们，反馈会直接发到作者手里。
+      </p>
+      <button class="feedback-cta" @click="showFeedback = true">
+        <span class="envelope">💌</span> 提交意见反馈
+      </button>
+    </section>
+
     <DonateDialog :visible="showDonate" @close="showDonate = false" />
+    <FeedbackDialog :visible="showFeedback" @close="showFeedback = false" />
   </div>
 </template>
 
@@ -144,6 +164,7 @@ import { check as checkUpdateRaw, promptAndApplyUpdate } from '../utils/updater'
 import { api } from '../utils/api'
 import { toastSuccess, toastError } from '../utils/toast'
 import DonateDialog from '../components/DonateDialog.vue'
+import FeedbackDialog from '../components/FeedbackDialog.vue'
 
 const currentVersion = ref('0.0.0')
 const checkingUpdate = ref(false)
@@ -159,6 +180,7 @@ const theme = ref('system')
 const fontSize = ref('medium')
 const dbInfo = ref<{ path: string; size_bytes: number; backups_dir: string; backup_count: number } | null>(null)
 const showDonate = ref(false)
+const showFeedback = ref(false)
 const showCustomize = ref(false)
 const customDir = ref('')
 const applying = ref(false)

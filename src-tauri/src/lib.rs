@@ -94,6 +94,10 @@ pub fn run() {
             commands::favorite::list_favorites,
             commands::favorite::is_favorite,
             commands::favorite::clear_favorites,
+            commands::feedback::build_feedback,
+            commands::feedback::save_feedback_local,
+            commands::feedback::open_feedback_folder,
+            commands::feedback::get_feedback_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

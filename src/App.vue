@@ -2,7 +2,7 @@
   <div class="app">
     <aside class="sidebar">
       <div class="logo">
-        <img src="/logo-256.png" class="logo-img" alt="刷题宝" />
+        <img src="/logo-256.png?v=0.1.1" class="logo-img" alt="刷题宝" />
         <span>刷题宝</span>
       </div>
 
@@ -31,6 +31,7 @@
           <span class="donate-text">支持作者</span>
         </button>
         <div class="app-actions">
+          <button class="app-action-btn" @click="showFeedback = true" title="意见反馈">💌</button>
           <button class="app-action-btn" @click="handleRestart" title="重启应用">🔄</button>
           <button class="app-action-btn danger" @click="handleQuit" title="关闭应用">✕</button>
         </div>
@@ -39,6 +40,7 @@
     <main class="content"><RouterView /></main>
 
     <DonateDialog :visible="showDonate" @close="showDonate = false" />
+    <FeedbackDialog :visible="showFeedback" @close="showFeedback = false" />
     <Toast />
   </div>
 </template>
@@ -50,12 +52,14 @@ import { useBankStore } from './stores/bank'
 import { api } from './utils/api'
 import { autoCheckOnStartup } from './utils/updater'
 import DonateDialog from './components/DonateDialog.vue'
+import FeedbackDialog from './components/FeedbackDialog.vue'
 import Toast from './components/Toast.vue'
 
 const route = useRoute()
 const bankStore = useBankStore()
 const currentBank = ref<{ id: number; name: string } | null>(null)
 const showDonate = ref(false)
+const showFeedback = ref(false)
 
 async function refreshBankNav() {
   const bankId = Number(route.params.bankId)

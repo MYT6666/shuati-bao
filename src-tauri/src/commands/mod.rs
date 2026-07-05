@@ -4,3 +4,4 @@ pub mod import;
 pub mod practice;
 pub mod settings;
 pub mod favorite;
+pub mod feedback;
