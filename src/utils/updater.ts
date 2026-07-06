@@ -10,6 +10,16 @@ function toast(type: 'success' | 'error' | 'info' | 'warning', message: string, 
   window.dispatchEvent(new CustomEvent('app-toast', { detail: { type, message, duration } }))
 }
 
+function toastUpdate(id: number, opts: { message?: string; progress?: number; type?: 'success' | 'error' | 'info' | 'warning' }) {
+  window.dispatchEvent(new CustomEvent('app-toast-update', { detail: { id, ...opts } }))
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
 export interface UpdateCheckResult {
   hasUpdate: boolean
   currentVersion: string
@@ -65,19 +75,36 @@ export async function promptAndApplyUpdate(update: Update): Promise<boolean> {
   )
   if (!yes) return false
 
-  toast('info', '正在下载更新...', 0)
+  const toastId = Date.now()
+  window.dispatchEvent(new CustomEvent('app-toast', {
+    detail: { id: toastId, type: 'info', message: '正在下载更新... 0%', duration: 0, progress: 0 }
+  }))
   try {
+    let totalBytes = 0
     await update.downloadAndInstall((event) => {
       if (event.event === 'Progress') {
-        console.log('下载进度：', event.data)
+        const data = event.data as { chunkLength: number; contentLength?: number }
+        if (data.contentLength) totalBytes = data.contentLength
+        if (totalBytes > 0) {
+          const pct = Math.min(100, Math.round((data.chunkLength / totalBytes) * 100))
+          toastUpdate(toastId, {
+            message: `正在下载更新... ${pct}% (${formatSize(data.chunkLength)}/${formatSize(totalBytes)})`,
+            progress: pct,
+          })
+        } else {
+          toastUpdate(toastId, { message: `正在下载更新... ${formatSize(data.chunkLength)}` })
+        }
       } else if (event.event === 'Finished') {
-        toast('success', '下载完成，准备重启...')
+        toastUpdate(toastId, { message: '下载完成，准备安装...', progress: 100, type: 'success' })
       }
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('下载/安装更新失败：', e)
-    toast('error', '更新失败：' + msg)
+    toastUpdate(toastId, { message: '更新失败：' + msg, type: 'error', progress: undefined })
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('app-toast-remove', { detail: { id: toastId } }))
+    }, 4000)
     return false
   }
 
