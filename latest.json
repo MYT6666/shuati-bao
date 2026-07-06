@@ -1,11 +1,11 @@
 {
-  "version": "0.1.3",
-  "notes": "## v0.1.3 更新\n\n### 新功能\n- 更新下载进度条：实时显示百分比和已下载/总大小\n- Toast 组件支持进度条渲染，不再误以为"宕机"\n\n### 技术改进\n- Toast 新增 progress 字段和 app-toast-update/remove 事件\n- updater.ts 下载时实时同步进度到 toast",
-  "pub_date": "2026-07-06T15:45:00Z",
+  "version": "0.1.4",
+  "notes": "## v0.1.4 更新\n\n### 修复\n- 修复 updater endpoint URL，解决检查更新失败问题\n- 在 endpoint URL 后加 `?ref=main` 参数绕过 GitHub CDN 缓存\n\n### 前置版本\n- v0.1.3: 更新下载进度条",
+  "pub_date": "2026-07-06T16:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "untrusted comment: shuati-bao updater\nXCN87FMMg/efTGd9I9KNtsflxXlyQKzUUa+i5wxKI871yxnOO92fkqK7/4UDGceGrZr/pD1y22uXlPRqy8uBBg==\n",
-      "url": "https://github.com/MYT6666/shuati-bao/releases/download/v0.1.3/ShuatiBao_0.1.3_x64-setup.exe"
+      "signature": "untrusted comment: shuati-bao updater\nvSlaL8gLLr+bc96QJrZTo+H3ava49RS93E36EicKICBzlkK5GFNdxajC9CJOJheU+kJ+ncZyXEDHnATVYJy4Cw==\n",
+      "url": "https://github.com/MYT6666/shuati-bao/releases/download/v0.1.4/ShuatiBao_0.1.4_x64-setup.exe"
     }
   }
 }
