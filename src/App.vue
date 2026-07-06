@@ -2,7 +2,7 @@
   <div class="app">
     <aside class="sidebar">
       <div class="logo">
-        <img src="/logo-256.png?v=0.1.4" class="logo-img" alt="刷题宝" />
+        <img src="/logo-256.png?v=0.1.5" class="logo-img" alt="刷题宝" />
         <span>刷题宝</span>
       </div>
 

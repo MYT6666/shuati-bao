@@ -53,9 +53,10 @@ export async function checkForUpdates(opts: { silent?: boolean } = {}): Promise<
       notes: typeof update.body === 'string' ? update.body : undefined
     }
   } catch (e) {
-    console.error('检查更新失败：', e)
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('检查更新失败详细错误：', e)
+    console.error('错误堆栈：', e instanceof Error ? e.stack : '无堆栈信息')
     if (!opts.silent) {
-      const msg = e instanceof Error ? e.message : String(e)
       toast('error', '检查更新失败：' + msg)
     }
     return null
