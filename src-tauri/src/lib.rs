@@ -1,10 +1,10 @@
+pub mod commands;
 pub mod db;
 pub mod import;
-pub mod commands;
 
-use tauri::Manager;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use tauri::Manager;
 
 /// 调试日志文件路径（exe 同目录），追加写入
 fn debug_log_path() -> std::path::PathBuf {
@@ -22,7 +22,11 @@ pub fn dbg_log(msg: impl AsRef<str>) {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let line = format!("[{}] {}", ts, msg.as_ref());
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(debug_log_path()) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(debug_log_path())
+    {
         let _ = writeln!(f, "{}", line);
         let _ = f.flush();
     }
@@ -39,8 +43,17 @@ pub fn run() {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        let msg = format!("[{}] PANIC: {}\n  location: {}", ts, info, info.location().map(|l| l.to_string()).unwrap_or_default());
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+        let msg = format!(
+            "[{}] PANIC: {}\n  location: {}",
+            ts,
+            info,
+            info.location().map(|l| l.to_string()).unwrap_or_default()
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
             let _ = writeln!(f, "{}", msg);
             let _ = f.flush();
         }
@@ -57,7 +70,9 @@ pub fn run() {
             let app_data = app.path().app_data_dir().expect("no app data dir");
             let db_state = db::open_db(&app_data).expect("failed to open db");
             app.manage(db_state);
-            app.manage(commands::import::CancelFlag(Arc::new(AtomicBool::new(false))));
+            app.manage(commands::import::CancelFlag(Arc::new(AtomicBool::new(
+                false,
+            ))));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -78,6 +93,7 @@ pub fn run() {
             commands::practice::restore_wrong_to_pending,
             commands::import::import_from_html,
             commands::import::import_from_pdf,
+            commands::import::cancel_pdf_import,
             commands::import::import_with_ai,
             commands::import::test_ai_connection,
             commands::import::cancel_import,

@@ -25,6 +25,7 @@ export const api = {
   importWithAi: (bankId: number, text: string) => invoke<{ count: number; expected: number }>('import_with_ai', { bankId, text }),
   testAiConnection: () => invoke<void>('test_ai_connection'),
   cancelImport: () => invoke<void>('cancel_import'),
+  cancelPdfImport: () => invoke<void>('cancel_pdf_import'),
   getDbInfo: () => invoke<{ path: string; size_bytes: number; backups_dir: string; backup_count: number }>('get_db_info'),
   openDbFolder: () => invoke<string>('open_db_folder'),
   pickDatabaseFolder: () => invoke<string | null>('pick_database_folder'),

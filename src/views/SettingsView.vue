@@ -79,6 +79,15 @@
       <div v-if="showUpdateLog" class="update-log">
         <h4>更新日志</h4>
         <div class="log-entry">
+          <span class="log-version">v0.1.8</span>
+          <ul>
+            <li>修复 mammoth 提取 docx 时选项分隔符错位导致部分题目选项被并入题干的问题（如习思想2第101题）</li>
+            <li>PDF 导入改为异步执行，支持取消按钮和逐页进度反馈</li>
+            <li>PDF 导入添加 5 分钟硬超时保护，单页失败自动跳过</li>
+            <li>答案区识别优化，第十五章等缺少小节标题的章节可基于内容自动推断题型</li>
+          </ul>
+        </div>
+        <div class="log-entry">
           <span class="log-version">v0.1.1</span>
           <ul>
             <li>更新应用图标（全平台）</li>

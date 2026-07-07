@@ -26,7 +26,7 @@
         <label><input type="radio" v-model="engine" value="ai" /> AI 引擎（需配置 API Key）</label>
       </div>
       <button @click="pickFile">选择 .docx 文件</button>
-      <p class="hint">仅支持 .docx 格式。如果是 .doc 旧格式，请先用 Word 或 WPS 另存为 .docx；PDF/扫描件暂不支持</p>
+      <p class="hint">支持 .docx / .txt / .md / .pdf 格式。大文件或 PDF 可能需要 1-2 分钟，请耐心等待</p>
       <p v-if="fileName">{{ fileName }}</p>
     </div>
 
@@ -58,6 +58,12 @@
         <span class="progress-text">{{ progress.done }} / {{ progress.total }} 块（{{ progressPct }}%）</span>
       </div>
 
+      <!-- PDF 逐页进度条 -->
+      <div v-else-if="pdfProgress && pdfProgress.total > 0" class="progress-bar">
+        <div class="progress-fill" :style="{ width: (pdfProgress.total > 0 ? (pdfProgress.done / pdfProgress.total * 100) : 0) + '%' }"></div>
+        <span class="progress-text">{{ pdfProgress.done }} / {{ pdfProgress.total }} 页（{{ pdfProgress.total > 0 ? Math.round(pdfProgress.done / pdfProgress.total * 100) : 0 }}%）</span>
+      </div>
+
       <!-- 不确定进度条（读取/解析/保存等不可追踪阶段） -->
       <div v-else class="progress-bar indeterminate">
         <div class="progress-fill-indeterminate"></div>
@@ -65,8 +71,9 @@
 
       <p class="status-text">{{ status }}</p>
       <p class="elapsed" v-if="elapsed > 0">已耗时 {{ elapsed }} 秒</p>
-      <p class="hint">识别中请勿关闭窗口，大题库可能需要 30-60 秒</p>
+      <p class="hint">识别中请勿关闭窗口。大题库可能需要 1-2 分钟；PDF 超过 5 分钟将自动停止</p>
       <button v-if="engine === 'ai'" class="cancel-btn" @click="cancelImport" :disabled="cancelling">{{ cancelling ? '取消中...' : '取消导入' }}</button>
+      <button v-if="isPdfImporting" class="cancel-btn" @click="cancelPdfImport" :disabled="cancelling">{{ cancelling ? '取消中...' : '取消 PDF 导入' }}</button>
     </div>
 
     <div class="step" v-if="step === 2 && importWarning" style="border-color: #f56c6c;">
@@ -144,6 +151,9 @@ const engine = ref<'local' | 'ai'>('local')
 const progress = ref({ done: 0, total: 0 })
 const importWarning = ref('')
 const cancelling = ref(false)
+// PDF 导入进度
+const pdfProgress = ref<{ stage: string; done: number; total: number; page?: number; success?: boolean } | null>(null)
+const isPdfImporting = computed(() => pdfProgress.value !== null && pdfProgress.value.stage === 'parsing')
 
 // 拖拽上传
 const dragActive = ref(false)
@@ -217,16 +227,24 @@ function stopTimer() {
 // 旧实现中 unlisten 是 runImport 内的局部变量，若用户在 AI 导入过程中离开页面，
 // 监听器不会被释放，导致内存泄漏与对已销毁组件的状态更新
 let aiProgressUnlisten: (() => void) | null = null
+let pdfProgressUnlisten: (() => void) | null = null
 function clearAiProgressListener() {
   if (aiProgressUnlisten) {
     try { aiProgressUnlisten() } catch (_) { /* ignore */ }
     aiProgressUnlisten = null
   }
 }
+function clearPdfProgressListener() {
+  if (pdfProgressUnlisten) {
+    try { pdfProgressUnlisten() } catch (_) { /* ignore */ }
+    pdfProgressUnlisten = null
+  }
+}
 
 onUnmounted(() => {
   stopTimer()
   clearAiProgressListener()
+  clearPdfProgressListener()
 })
 
 onMounted(async () => {
@@ -327,7 +345,24 @@ async function runImport(filePath: string) {
     } else if (ext === 'pdf') {
       // PDF：直接传路径给后端 lopdf 处理
       status.value = '正在解析 PDF...'
+      pdfProgress.value = { stage: 'parsing', done: 0, total: 0 }
       dbg('pdf_start', { path: filePath })
+      // 监听 PDF 解析进度
+      clearPdfProgressListener()
+      pdfProgressUnlisten = await listen<{ stage: string; done: number; total: number; page?: number; success?: boolean }>('pdf_progress', (e) => {
+        pdfProgress.value = e.payload
+        if (e.payload.stage === 'parsing') {
+          stage.value = 'parsing'
+          if (e.payload.total > 0) {
+            status.value = `正在解析 PDF 文本... ${e.payload.done}/${e.payload.total} 页${e.payload.success === false ? '（本页失败，跳过）' : ''}`
+          } else {
+            status.value = '正在解析 PDF 文本...'
+          }
+        } else if (e.payload.stage === 'recognizing') {
+          stage.value = 'recognizing'
+          status.value = '正在识别题目结构...'
+        }
+      })
       const cnt = await api.importFromPdf(bankId.value, filePath)
       dbg('pdf_done', { count: cnt })
       // 跳到 review 阶段
@@ -338,7 +373,11 @@ async function runImport(filePath: string) {
       stage.value = 'done'
       stopTimer()
       importWarning.value = cnt === 0 ? '未识别到题目，请检查 PDF 是否含可选中文本（扫描件无法识别）。' : ''
-      clearAiProgressListener()
+      dbg('step3_switch_start', { source: 'pdf', count: qs.length })
+      step.value = 3
+      dbg('step3_switch_done', { source: 'pdf' })
+      clearPdfProgressListener()
+      pdfProgress.value = null
       return
     } else {
       // txt / md 等纯文本
@@ -404,6 +443,7 @@ async function runImport(filePath: string) {
     cancelling.value = false
   } finally {
     clearAiProgressListener()
+    clearPdfProgressListener()
   }
 }
 
@@ -414,6 +454,19 @@ async function cancelImport() {
     status.value = '正在取消...'
   } catch (e) {
     console.error('取消失败：', e)
+  }
+}
+
+// 取消 PDF 导入：触发后端全局取消标志，pdf_to_html 循环将在下一页检查并退出
+async function cancelPdfImport() {
+  cancelling.value = true
+  try {
+    status.value = '正在取消 PDF 导入...'
+    await api.cancelPdfImport()
+  } catch (e) {
+    console.error('取消 PDF 导入失败：', e)
+  } finally {
+    cancelling.value = false
   }
 }
 

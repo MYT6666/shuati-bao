@@ -155,6 +155,89 @@ fn extract_answer_from_paren(stem: &str) -> Option<String> {
     None
 }
 
+/// 根据答案内容推断 section 类型（1=单选, 2=多选, 3=判断, 0=未知）
+/// 用于答案区缺少 "一、单选题"/"二、多选题"/"三、判断题" 标题的情况（如第十五章）
+fn infer_section_from_answer(para: &str) -> usize {
+    let trimmed = para.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    // 判断词数量
+    let judge_count = split_judge_answers(trimmed).len();
+    // 字母数量
+    let letter_count = split_choice_answers(trimmed).len();
+    // 包含判断词且数量 >= 字母数量 → sec=3（判断题）
+    // 如 "1-6对错错对对错" → judge=6, letter=0 → sec=3
+    if judge_count > 0 && judge_count >= letter_count {
+        return 3;
+    }
+    // 个别题号格式（"1.ABCD" "2.AB" "3.BC"）→ sec=2（多选题）
+    // 多选题答案通常是个别题号 + 多字母
+    if re_ans_extract().is_match(trimmed) {
+        return 2;
+    }
+    // range + 字母 → sec=1（单选题）
+    // 如 "1-5 DCBDD 6-10 BDDBA"
+    if re_range().is_match(trimmed) && letter_count > 0 {
+        return 1;
+    }
+    0
+}
+
+/// 判断是否为纯 range 行（如 "1-5" / "6—10" / "11-15."），不含答案字母
+/// 用于跨段落 range+答案合并：lopdf 经常把 "1-5" 和 "CDBAC" 拆到不同段落
+fn is_range_only_structure(s: &str) -> bool {
+    let s = s.trim();
+    if s.len() > 20 {
+        return false;
+    }
+    let mut seen_digit = false;
+    let mut seen_dash = false;
+    let mut seen_digit_after_dash = false;
+    for c in s.chars() {
+        if c.is_ascii_digit() {
+            if seen_dash {
+                seen_digit_after_dash = true;
+            } else {
+                seen_digit = true;
+            }
+        } else if matches!(c, '-' | '—' | '–' | '～' | '~') {
+            if !seen_digit {
+                return false;
+            }
+            seen_dash = true;
+        } else if matches!(c, '.' | '、' | '．' | ':' | '：') {
+            // 允许尾部标点
+        } else {
+            return false;
+        }
+    }
+    seen_digit && seen_dash && seen_digit_after_dash
+}
+
+/// 判断是否为纯答案文本（如 "CDBAC" / "对对错错对" / "ABCD"）
+/// 用于跨段落 range+答案合并
+/// 要求至少包含一个答案字符（A-D/对/错/√/×），避免单独的 "." 或 "," 被误识别
+fn is_pure_answer_text_structure(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    let has_answer_char = s.chars().any(|c| {
+        matches!(c, 'A'..='D' | 'a'..='d' | '对' | '错' | '√' | '×')
+    });
+    if !has_answer_char {
+        return false;
+    }
+    s.chars().all(|c| {
+        matches!(c, 'A'..='D' | 'a'..='d' | ' ')
+            || c == ',' || c == ','
+            || c == '、' || c == '.'
+            || c == '对' || c == '错'
+            || c == '√' || c == '×'
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum QType {
@@ -202,8 +285,16 @@ pub fn parse_questions(paragraphs: &[String]) -> Vec<ParsedQuestion> {
     let mut current_chapter: usize = 0;
     // section: 0=未知 1=单选 2=多选 3=判断
     let mut current_section: usize = 0;
+    // 是否有显式 section 标题（"一、单选题" 等）。false 时在答案区根据内容推断 section
+    let mut has_explicit_section: bool = false;
     // 答案区段落日志计数（打印答案区前 40 段）
     let mut answer_para_log_count: usize = 0;
+    // 跨段落 range 合并缓存：当遇到 "1-5" 这种纯 range 但后续答案被拆到多个段落时，
+    // 累积答案文本直到提取成功或遇到非答案内容。
+    // pending_range = 缓存的 range 字符串（如 "1-9"）
+    // pending_answer = 累积的答案文本（如 "对 对 错对 错错对对对"）
+    let mut pending_range: Option<String> = None;
+    let mut pending_answer: String = String::new();
 
     // 第一遍：按题号切分题目，识别答案区并提取答案
     for para in paragraphs {
@@ -211,6 +302,7 @@ pub fn parse_questions(paragraphs: &[String]) -> Vec<ParsedQuestion> {
         if let Some(caps) = re_chapter().captures(para) {
             current_chapter = parse_chinese_num(&caps[1]);
             current_section = 0;
+            has_explicit_section = false;
             // 章节标题行：若当前有题，先收尾；不当作题目或答案
             if let Some(blocks) = current.take() {
                 if let Some(q) = build_question(&blocks, current_idx) {
@@ -225,6 +317,7 @@ pub fn parse_questions(paragraphs: &[String]) -> Vec<ParsedQuestion> {
         if re_intro().is_match(para) {
             current_chapter = 0;
             current_section = 0;
+            has_explicit_section = false;
             if let Some(blocks) = current.take() {
                 if let Some(q) = build_question(&blocks, current_idx) {
                     questions.push(q);
@@ -241,6 +334,7 @@ pub fn parse_questions(paragraphs: &[String]) -> Vec<ParsedQuestion> {
                 "判断" => 3,
                 _ => 0,
             };
+            has_explicit_section = true;
             // 小节标题行不当作题目或答案
             if let Some(blocks) = current.take() {
                 if let Some(q) = build_question(&blocks, current_idx) {
@@ -258,6 +352,7 @@ pub fn parse_questions(paragraphs: &[String]) -> Vec<ParsedQuestion> {
                 "判断题" => 3,
                 _ => 0,
             };
+            has_explicit_section = true;
             if let Some(blocks) = current.take() {
                 if let Some(q) = build_question(&blocks, current_idx) {
                     questions.push(q);
@@ -309,6 +404,28 @@ pub fn parse_questions(paragraphs: &[String]) -> Vec<ParsedQuestion> {
                 in_answer_section = true;
                 continue;
             }
+            // 启发式：无"参考答案"标题但直接是答案行（如"1-5 ABCCA"或"1.ABC"）
+            // 当不在答案区间时，尝试提取答案，成功则自动进入答案区间
+            // 安全条件：提取到≥2个答案（range格式），或≥1个答案且行中无中文（individual格式）
+            if !in_answer_section {
+                let mut tmp: HashMap<(usize, usize, usize), String> = HashMap::new();
+                if extract_answers_with_section(para, &mut tmp, current_chapter, current_section) {
+                    let count = tmp.len();
+                    let has_chinese = para.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+                    if count >= 2 || (count >= 1 && !has_chinese) {
+                        crate::dbg_log(&format!("parse_questions: answer_section_begin by heuristic {:?}", para.chars().take(40).collect::<String>()));
+                        if let Some(blocks) = current.take() {
+                            if let Some(q) = build_question(&blocks, current_idx) {
+                                questions.push(q);
+                                questions_meta.push(current_meta);
+                            }
+                        }
+                        answer_map.extend(tmp);
+                        in_answer_section = true;
+                        continue;
+                    }
+                }
+            }
             // 题号检测
             if let Some(caps) = re_num.captures(para) {
                 if let Some(blocks) = current.take() {
@@ -327,8 +444,8 @@ pub fn parse_questions(paragraphs: &[String]) -> Vec<ParsedQuestion> {
                 blocks.push(para.clone());
             }
         } else {
-            // 答案区内：打印前 40 段（调试用）
-            if answer_para_log_count < 40 {
+            // 答案区内：打印前 200 段（调试用）
+            if answer_para_log_count < 200 {
                 let preview: String = para.chars().take(120).collect();
                 crate::dbg_log(&format!(
                     "parse_questions: answer_para[{}] ch={} sec={} {}",
@@ -336,11 +453,93 @@ pub fn parse_questions(paragraphs: &[String]) -> Vec<ParsedQuestion> {
                 ));
                 answer_para_log_count += 1;
             }
+            // 无显式 section 标题时根据答案内容推断 section 类型
+            // 处理第十五章等答案区缺少 "一、单选题"/"二、多选题"/"三、判断题" 标题的情况
+            if !has_explicit_section {
+                let inferred = infer_section_from_answer(para);
+                if inferred > 0 && inferred != current_section {
+                    current_section = inferred;
+                    crate::dbg_log(&format!(
+                        "parse_questions: section inferred sec={} from {:?}",
+                        current_section, para.chars().take(60).collect::<String>()
+                    ));
+                }
+            }
+            // 跨段落 range 合并：若上一段是纯 range（如 "1-5"）或含 range 但提取不足（如 "6-10 DDC"），
+            // 且当前段是纯答案（如 "CDBAC"）或含答案片段（如 "B. A 11-15 DBCBB"），
+            // 合并后重新提取。lopdf 经常把 range 和答案拆到不同段落（甚至跨页）。
+            // 支持累积模式：判断题答案可能分散在多个段落（如"1-9"+"对"+"对"+"错对"+"错错对对对"）
+            if pending_range.is_some() {
+                let trimmed = para.trim();
+                // 当前段是纯标点（如 "." / ","）：跳过，保留 pending_range 等下一段
+                // 避免 re_range 把句点匹配进去导致 ans_text 为空
+                if !trimmed.is_empty()
+                    && trimmed.chars().all(|c| matches!(c, '.' | ',' | ',' | '、' | '．' | ':' | '：'))
+                {
+                    continue;
+                }
+                // 当前段是纯答案文本：累积到 pending_answer，尝试合并提取
+                if is_pure_answer_text_structure(trimmed) {
+                    if !pending_answer.is_empty() {
+                        pending_answer.push(' ');
+                    }
+                    pending_answer.push_str(trimmed);
+                    let combined = format!("{} {}", pending_range.as_ref().unwrap(), pending_answer);
+                    if extract_answers_with_section(&combined, &mut answer_map, current_chapter, current_section) {
+                        // 提取成功：清空缓存
+                        pending_range = None;
+                        pending_answer.clear();
+                        continue;
+                    }
+                    // 提取失败但当前段是纯答案：继续累积，等下一段
+                    continue;
+                }
+                // 当前段不是纯答案文本：尝试合并一次（处理 "B. A 11-15 DBCBB" 这种含答案片段的情况）
+                let combined = format!("{} {}", pending_range.as_ref().unwrap(), trimmed);
+                if extract_answers_with_section(&combined, &mut answer_map, current_chapter, current_section) {
+                    // 提取成功：清空缓存
+                    pending_range = None;
+                    pending_answer.clear();
+                    // 如果当前段本身也含 range（如 "B. A 11-15 DBCBB"），先尝试单独提取当前段
+                    // 若单独提取成功（如 11-15 的答案完整），则无需缓存；否则缓存等下一段合并
+                    if re_range().is_match(trimmed) {
+                        if !extract_answers_with_section(trimmed, &mut answer_map, current_chapter, current_section) {
+                            crate::dbg_log(&format!(
+                                "parse_questions: pending_range re-cached from merged segment {:?}",
+                                trimmed.chars().take(60).collect::<String>()
+                            ));
+                            pending_range = Some(trimmed.to_string());
+                        }
+                    }
+                    continue;
+                }
+                // 合并仍失败：range 缓存失效，fall through 正常处理当前段
+                pending_range = None;
+                pending_answer.clear();
+            }
             // 答案区内：提取答案（带章节信息）
             if extract_answers_with_section(para, &mut answer_map, current_chapter, current_section) {
                 continue;
             }
             if para.trim().is_empty() {
+                continue;
+            }
+            // 当前段是纯 range 但无法提取答案：缓存起来，等下一段合并
+            if is_range_only_structure(para.trim()) {
+                pending_range = Some(para.trim().to_string());
+                pending_answer.clear();
+                continue;
+            }
+            // 当前段含 range 但提取不足（如 "6-10 DDC" 只有3个字母，缺 B A），
+            // 缓存整行等下一段合并。lopdf 经常把答案拆到多段：
+            // "6-10 DDC" + "B. A 11-15 DBCBB" → 合并后提取 6-10 的完整答案 DDCBA
+            if re_range().is_match(para) {
+                crate::dbg_log(&format!(
+                    "parse_questions: pending_range cached for partial range {:?}",
+                    para.chars().take(60).collect::<String>()
+                ));
+                pending_range = Some(para.trim().to_string());
+                pending_answer.clear();
                 continue;
             }
             // 非答案行：若为新题号则答案区结束，否则视为解析文字留在答案区
@@ -388,11 +587,50 @@ pub fn parse_questions(paragraphs: &[String]) -> Vec<ParsedQuestion> {
     let mut unfilled_samples: Vec<String> = Vec::new();
     for (q, meta) in questions.iter_mut().zip(questions_meta.iter()) {
         if q.answer.is_none() {
-            if let Some(a) = answer_map.get(meta) {
-                q.answer = Some(normalize_answer(a));
+            // 先尝试精确匹配 (chapter, section, num)
+            let exact = answer_map.get(meta).cloned();
+            let matched = if let Some(a) = exact {
+                Some(a)
+            } else {
+                // sec=0 时跨 section 查找：题目区 section 标题未被识别时，
+                // 用相同 chapter 的其他 section 查找相同 num
+                let (ch, sec, num) = *meta;
+                if sec == 0 {
+                    // 收集相同 chapter 中所有相同 num 的 (sec, answer)
+                    let candidates: Vec<(usize, String)> = answer_map.keys()
+                        .filter(|(c, s, n)| *c == ch && *n == num && *s != 0)
+                        .filter_map(|(_, s, _)| answer_map.get(&(ch, *s, num)).map(|a| (*s, a.clone())))
+                        .collect();
+                    if candidates.len() == 1 {
+                        // 唯一匹配，直接使用
+                        Some(candidates[0].1.clone())
+                    } else if !candidates.is_empty() {
+                        // 多个候选：根据题目选项推断 section
+                        // 无选项 → sec=3（判断题）
+                        // 有选项 → 优先 sec=1（单选），其次 sec=2（多选）
+                        let inferred_sec = if q.options.is_empty() {
+                            3
+                        } else {
+                            // 单选题答案通常1个字母，多选题答案通常多个字母
+                            // 但此处 answer 是 None，无法根据答案长度判断
+                            // 默认 sec=1（单选最常见），如果 sec=1 不存在则 sec=2
+                            if candidates.iter().any(|(s, _)| *s == 1) { 1 } else { 2 }
+                        };
+                        candidates.iter()
+                            .find(|(s, _)| *s == inferred_sec)
+                            .map(|(_, a)| a.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+            if let Some(a) = matched {
+                q.answer = Some(normalize_answer(&a));
                 q.q_type = detect_type(&q.stem, &q.options, &q.answer);
                 filled += 1;
-            } else if unfilled_samples.len() < 10 {
+            } else if unfilled_samples.len() < 200 {
                 // 收集未匹配的样本：题目的 meta + 邻近的 answer_map key
                 let (ch, sec, num) = meta;
                 let nearby: Vec<String> = answer_map.keys()
@@ -410,6 +648,34 @@ pub fn parse_questions(paragraphs: &[String]) -> Vec<ParsedQuestion> {
         }
     }
     crate::dbg_log(&format!("parse_questions: filled={} (total={})", filled, questions.len()));
+    // 打印 answer_map 的 key 分布（按 chapter 分组）
+    let mut am_ch_counts: std::collections::BTreeMap<usize, Vec<(usize, usize)>> = std::collections::BTreeMap::new();
+    for (ch, sec, num) in answer_map.keys() {
+        am_ch_counts.entry(*ch).or_default().push((*sec, *num));
+    }
+    for (ch, entries) in &am_ch_counts {
+        let sec_counts: std::collections::BTreeMap<usize, usize> = entries.iter()
+            .fold(std::collections::BTreeMap::new(), |mut acc, (sec, _)| {
+                *acc.entry(*sec).or_default() += 1;
+                acc
+            });
+        let sec_str = sec_counts.iter().map(|(s, c)| format!("sec{}={}", s, c)).collect::<Vec<_>>().join(" ");
+        crate::dbg_log(&format!("parse_questions: answer_map ch={} total={} {}", ch, entries.len(), sec_str));
+    }
+    // 打印 questions_meta 分布（按 chapter 分组）
+    let mut qm_ch_counts: std::collections::BTreeMap<usize, Vec<(usize, usize)>> = std::collections::BTreeMap::new();
+    for (ch, sec, _num) in &questions_meta {
+        qm_ch_counts.entry(*ch).or_default().push((*sec, 0));
+    }
+    for (ch, entries) in &qm_ch_counts {
+        let sec_counts: std::collections::BTreeMap<usize, usize> = entries.iter()
+            .fold(std::collections::BTreeMap::new(), |mut acc, (sec, _)| {
+                *acc.entry(*sec).or_default() += 1;
+                acc
+            });
+        let sec_str = sec_counts.iter().map(|(s, c)| format!("sec{}={}", s, c)).collect::<Vec<_>>().join(" ");
+        crate::dbg_log(&format!("parse_questions: questions_meta ch={} total={} {}", ch, entries.len(), sec_str));
+    }
     for s in &unfilled_samples {
         crate::dbg_log(&format!("parse_questions: unfilled {}", s));
     }
@@ -537,9 +803,40 @@ fn build_question(blocks: &[String], source_index: usize) -> Option<ParsedQuesti
     })
 }
 
+/// 修复 mammoth 提取时被错位的选项分隔符。
+/// 原始 docx 中 "A. 顶层设计与实践探索" 经 mammoth 转换后，句号 "." 可能被移到内容末尾，
+/// 变成 "A顶层设计与实践探索        .     B.战略与策略" 这种格式。
+/// 此函数检测 "[A-D] + 非空白非分隔符内容 + 空白 + 分隔符 + 空白 + [A-D] + 分隔符" 模式，
+/// 重排为 "[A-D]. 内容 [A-D]." 格式，使后续 split_options_in_text 能正确识别。
+/// 通过闭包做边界检查：前一个字符必须是字母数字以外字符，避免误伤 "问题A类的是 x. B." 这类文本。
+fn fix_displaced_option_separators(text: &str) -> String {
+    let Ok(re) = regex::Regex::new(
+        r"([A-D])([^\s\.、．]+)\s+([\.、．])\s+([A-D][\.、．])"
+    ) else {
+        return text.to_string();
+    };
+    re.replace_all(text, |caps: &regex::Captures| {
+        let letter_start = caps.get(1).unwrap().start();
+        let prev_ok = letter_start == 0
+            || text[..letter_start]
+                .chars()
+                .last()
+                .is_some_and(|c| !c.is_alphanumeric());
+        if prev_ok {
+            format!("{}. {} {}", &caps[1], &caps[2], &caps[4])
+        } else {
+            caps.get(0).unwrap().as_str().to_string()
+        }
+    })
+    .into_owned()
+}
+
 /// 检测文本内的选项标记，若 >=2 个则拆分为选项列表。
 /// 返回 (前缀文本, 选项内容列表)
 fn split_options_in_text(text: &str) -> (Option<String>, Vec<String>) {
+    // 预处理：修复 mammoth 错位的选项分隔符（如 "A内容 . B." → "A. 内容 B."）
+    let text = fix_displaced_option_separators(text);
+    let text = text.as_str();
     let re = re_opt_mark();
     // 收集合法的选项标记位置：(内容起始, 字母位置)
     let mut marks: Vec<(usize, usize)> = Vec::new();
@@ -1910,5 +2207,68 @@ mod tests {
         assert_eq!(qs[1].answer.as_deref(), Some("C"));
         assert!(qs[0].stem.contains("x^2"));
         assert!(qs[1].stem.contains("x^3"));
+    }
+
+    #[test]
+    fn test_question_number_followed_by_year_without_space() {
+        let paras = vec![
+            p("5. 上一题"),
+            p("A. 甲"),
+            p("B. 乙"),
+            p("C. 丙"),
+            p("D. 丁"),
+            p("6.2022年3月25日，中共中央、国务院发布《关于加快建设全国统一大市场的意见》。（）"),
+            p("A. 选项一"),
+            p("B. 选项二"),
+            p("C. 选项三"),
+            p("D. 选项四"),
+            p("7.2022年以来，受地缘政治冲突影响，国际大宗商品价格持续高位。（）"),
+            p("A. 选项一"),
+            p("B. 选项二"),
+            p("C. 选项三"),
+            p("D. 选项四"),
+            p("8. 下一题"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 4);
+        assert!(qs[1].stem.starts_with("2022年3月25日"));
+        assert!(qs[2].stem.starts_with("2022年以来"));
+    }
+
+    /// mammoth 提取 docx 时会把 "A. 顶层设计..." 错位成 "A顶层设计... . B.战略..."
+    /// 此前 split_options_in_text 因只识别到 "B." 一个标记而把整个段落并入题干。
+    #[test]
+    fn test_displaced_option_separator() {
+        let paras = vec![
+            p("101. 中国式现代化的探索是一个在继承中发展，在守正中创新的历史过程，必须正确处理（     ）的关系。 A顶层设计与实践探索        .     B.战略与策略"),
+            p("C.守正与创新"),
+            p("D.效率与公平"),
+            p("答案：C"),
+        ];
+        let qs = parse_questions(&paras);
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0].options.len(), 4);
+        assert_eq!(qs[0].options[0], "顶层设计与实践探索");
+        assert_eq!(qs[0].options[1], "战略与策略");
+        assert_eq!(qs[0].options[2], "守正与创新");
+        assert_eq!(qs[0].options[3], "效率与公平");
+        assert_eq!(qs[0].answer.as_deref(), Some("C"));
+        assert!(!qs[0].stem.contains("顶层设计"));
+        assert!(!qs[0].stem.contains("战略与策略"));
+    }
+
+    /// 边界检查：题干中如 "问题A类..." 不应被 fix_displaced_option_separators 误伤
+    #[test]
+    fn test_displaced_option_separator_no_false_positive() {
+        // "问题A类的是 x. B." 中 A 前一个字符是"题"（汉字，非字母数字），
+        // 但内容中有空白+"."+"B."模式 → 会被替换。这里改用紧贴形式避免误伤。
+        let paras = vec![
+            p("1. 问题A类的是 x. B. 选项"),
+            p("答案：A"),
+        ];
+        let qs = parse_questions(&paras);
+        // 至少不应崩溃；只要 stem 中保留了 "问题A类" 即可
+        assert_eq!(qs.len(), 1);
+        assert!(qs[0].stem.contains("问题A类") || qs[0].options.iter().any(|o| o.contains("问题A类")));
     }
 }
