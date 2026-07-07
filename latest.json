@@ -4,7 +4,7 @@
   "pub_date": "2026-07-07T22:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "untrusted comment: shuati-bao updater\nRWTHyk/dLYeIk+EmdFkx5l/LvYAbZcEIhxoHksGcs/LNH2QrUwtQsxkwcv8/tDzkLLoXHHWD5xLNstHcfd4tilxZp/W7+dA+Gws=\n",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNodWF0aS1iYW8gdXBkYXRlcgpSV1RIeWsvZExZZUlrK0VtZEZreDVsL0x2WUFiWmNFSWh4b0hrc0djcy9MTkgyUXJVd3RRc3hrd2N2OC90RHprTExvWEhIV0Q1eExOc3RIY2ZkNHRpbHhacC9XNytkQStHd3M9CnRydXN0ZWQgY29tbWVudDogdGltZXN0YW1wOjE3ODM0NDMyMzAJZmlsZTrliLfpopjlrp1fMC4xLjhfeDY0LXNldHVwLmV4ZQpidmJ5WWFlMkkwRnl5dkZ2ekZUOENhTjBYNGhpWmx0RUtEV0ZleWZiZG90T0RpU2o3NkRkb2QxSnhLUEM1MjRjTU02ME9BbnJES0NRSHJEak5pckxBQT09Cg==",
       "url": "https://github.com/MYT6666/shuati-bao/releases/download/v0.1.8/ShuatiBao_0.1.8_x64-setup.exe"
     }
   }
