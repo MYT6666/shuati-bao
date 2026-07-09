@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
 // --- Config ---
-const SETUP_PATH = 'D:\\桌面\\刷题宝\\src-tauri\\target\\release\\bundle\\nsis\\刷题宝_0.1.8_x64-setup.exe';
+const SETUP_PATH = 'D:\\桌面\\刷题宝\\src-tauri\\target\\release\\bundle\\nsis\\刷题宝_0.1.9_x64-setup.exe';
 const KEYS_DIR = 'D:\\桌面\\刷题宝\\src-tauri\\keys';
 const KEY_FILE = `${KEYS_DIR}\\updater-new-key.json`;
 const APP_NAME = 'shuati-bao';
